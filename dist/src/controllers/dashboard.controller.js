@@ -1,6 +1,7 @@
 const Ticket = require('../models/Ticket.model');
 const { asyncHandler } = require('../middleware/error.middleware');
 
+
 // @desc    Dashboard KPIs
 // @route   GET /api/dashboard
 const getDashboard = asyncHandler(async (req, res) => {

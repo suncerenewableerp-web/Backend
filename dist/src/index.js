@@ -23,6 +23,24 @@ const { errorHandler } = require("./middleware/error.middleware");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// If you deploy behind a reverse proxy / load balancer, enable trust proxy so
+// rate-limiting and req.ip work per-client (instead of all users sharing one IP).
+const parseTrustProxy = (value) => {
+  if (value === undefined || value === null) return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "") return undefined;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  const asInt = Number.parseInt(normalized, 10);
+  if (Number.isFinite(asInt) && String(asInt) === normalized) return asInt;
+  return value;
+};
+const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
+if (process.env.NODE_ENV === "production" && trustProxy === undefined) {
+  console.warn("⚠️  TRUST_PROXY is not set. If you are behind a reverse proxy, set TRUST_PROXY=1 so rate limiting works per-client.");
+}
+
 // ─── SECURITY MIDDLEWARE ──────────────────────────────────────────────────────
 app.use(helmet());
 
@@ -39,18 +57,15 @@ app.use(
 // ─── RATE LIMITING ────────────────────────────────────────────────────────────
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
+  max: parseInt(process.env.RATE_LIMIT_MAX) || 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Auth has dedicated (more nuanced) limits in `routes/auth.routes.js`
+  skip: (req) => req.path.startsWith("/auth"),
   message: { success: false, message: "Too many requests, please try again later." },
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { success: false, message: "Too many auth attempts, please try again in 15 minutes." },
-});
-
 app.use("/api", limiter);
-app.use("/api/auth", authLimiter);
 
 // ─── BODY PARSER ─────────────────────────────────────────────────────────────
 app.use(express.json({ limit: "10mb" }));
@@ -114,4 +129,3 @@ mongoose
   });
 
 module.exports = app;
-

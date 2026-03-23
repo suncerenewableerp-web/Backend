@@ -43,7 +43,7 @@ const limiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 500,
   message: { success: false, message: "Too many auth attempts, please try again in 15 minutes." },
 });
 

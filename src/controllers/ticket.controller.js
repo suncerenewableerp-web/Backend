@@ -1,7 +1,22 @@
 const Ticket = require('../models/Ticket.model');
+const JobCard = require('../models/JobCard.model');
 const { asyncHandler } = require('../middleware/error.middleware');
 const { getPagination } = require('../utils/helpers');
 const { calcSLAStatus } = require('../utils/helpers');
+
+const DEFAULT_FINAL_TESTING_ACTIVITIES = [
+  { sr: 1, activity: 'Continuity test of AC side', result: '' },
+  { sr: 2, activity: 'Continuity test of DC side', result: '' },
+  { sr: 3, activity: 'Check all internal cable connections', result: '' },
+  { sr: 4, activity: 'Check all card mounting screws', result: '' },
+  { sr: 5, activity: 'Check all MC4 connectors', result: '' },
+  { sr: 6, activity: 'Check all DC fuse', result: '' },
+  { sr: 7, activity: 'Check all DC MPPT input during power testing', result: '' },
+  { sr: 8, activity: 'Check and match Sr. No. with body and display', result: '' },
+  { sr: 9, activity: 'Check body cover mounting screws', result: '' },
+  { sr: 10, activity: 'Cleaning of all filters', result: '' },
+  { sr: 11, activity: 'Cleaning of inverter body', result: '' },
+];
 
 // @desc    Get all tickets
 // @route   GET /api/tickets
@@ -91,4 +106,111 @@ const updateTicket = asyncHandler(async (req, res) => {
   res.json({ success: true, data: ticket });
 });
 
-module.exports = { getTickets, createTicket, getTicket, updateTicket };
+// @desc    Get (or create) jobcard for a ticket
+// @route   GET /api/tickets/:id/jobcard
+const getTicketJobCard = asyncHandler(async (req, res) => {
+  const ticket = await Ticket.findById(req.params.id).populate('jobCard');
+  if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
+
+  if (ticket.jobCard) {
+    // Ensure defaults exist (non-destructive)
+    if (!ticket.jobCard.finalTestingActivities?.length) {
+      ticket.jobCard.finalTestingActivities = DEFAULT_FINAL_TESTING_ACTIVITIES;
+      await ticket.jobCard.save();
+    }
+    return res.json({ success: true, data: ticket.jobCard });
+  }
+
+  const jobcard = await JobCard.create({
+    ticket: ticket._id,
+    customerName: ticket.customer?.company || ticket.customer?.name,
+    finalTestingActivities: DEFAULT_FINAL_TESTING_ACTIVITIES,
+  });
+
+  ticket.jobCard = jobcard._id;
+  await ticket.save();
+
+  res.status(201).json({ success: true, data: jobcard });
+});
+
+function pickJobCardUpdate(input) {
+  if (!input || typeof input !== 'object') return {};
+  const allowedKeys = [
+    'jobNo',
+    'item',
+    'itemAndSiteDetails',
+    'customerName',
+    'inDate',
+    'outDate',
+    'currentStatus',
+    'remarks',
+    'checkedByName',
+    'checkedByDate',
+    'serviceJobs',
+    'finalTestingActivities',
+    'finalStatus',
+    'finalRemarks',
+    'finalCheckedByName',
+    'finalCheckedByDate',
+    // Keep legacy fields editable if already used
+    'diagnosis',
+    'repairNotes',
+    'testResults',
+    'warrantyGiven',
+    'spareParts',
+    'totalCost',
+    'stages',
+    'testedBy',
+  ];
+
+  const out = {};
+  for (const k of allowedKeys) {
+    if (Object.prototype.hasOwnProperty.call(input, k)) out[k] = input[k];
+  }
+  return out;
+}
+
+// @desc    Update (or create) jobcard for a ticket
+// @route   PUT /api/tickets/:id/jobcard
+const updateTicketJobCard = asyncHandler(async (req, res) => {
+  const ticket = await Ticket.findById(req.params.id);
+  if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
+
+  let jobcard = null;
+  if (ticket.jobCard) {
+    jobcard = await JobCard.findById(ticket.jobCard);
+  }
+
+  const patch = pickJobCardUpdate(req.body);
+
+  if (!jobcard) {
+    jobcard = await JobCard.create({
+      ticket: ticket._id,
+      customerName: ticket.customer?.company || ticket.customer?.name,
+      finalTestingActivities: DEFAULT_FINAL_TESTING_ACTIVITIES,
+      ...patch,
+    });
+    ticket.jobCard = jobcard._id;
+    await ticket.save();
+    return res.status(201).json({ success: true, data: jobcard });
+  }
+
+  jobcard.set(patch);
+
+  // Ensure defaults are present if client sends empty list unintentionally
+  if (!jobcard.finalTestingActivities?.length) {
+    jobcard.finalTestingActivities = DEFAULT_FINAL_TESTING_ACTIVITIES;
+  }
+
+  await jobcard.save();
+  res.json({ success: true, data: jobcard });
+});
+
+module.exports = {
+  getTickets,
+  createTicket,
+  getTicket,
+  updateTicket,
+  getTicketJobCard,
+  updateTicketJobCard,
+};

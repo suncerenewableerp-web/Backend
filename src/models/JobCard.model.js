@@ -1,5 +1,28 @@
 const mongoose = require('mongoose');
 
+const serviceJobSchema = new mongoose.Schema(
+  {
+    sn: Number,
+    jobName: String,
+    specification: String,
+    qty: Number,
+    reason: String,
+    date: Date,
+    doneBy: String,
+  },
+  { _id: false }
+);
+
+const finalTestingActivitySchema = new mongoose.Schema(
+  {
+    sr: Number,
+    activity: String,
+    result: { type: String, enum: ['YES', 'NO', ''], default: '' },
+    remarks: String,
+  },
+  { _id: false }
+);
+
 const jobCardSchema = new mongoose.Schema({
   ticket: { type: mongoose.Schema.ObjectId, ref: 'Ticket', required: true },
   diagnosis: String,
@@ -26,10 +49,29 @@ const jobCardSchema = new mongoose.Schema({
   repairNotes: String,
   testedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
   testResults: String,
-  warrantyGiven: Number // months
+  warrantyGiven: Number, // months
+
+  // Client sheet fields (Service Job History Sheet + Final Testing)
+  jobNo: String,
+  item: String,
+  itemAndSiteDetails: String,
+  customerName: String,
+  inDate: Date,
+  outDate: Date,
+  currentStatus: String,
+  remarks: String,
+  checkedByName: String,
+  checkedByDate: Date,
+
+  serviceJobs: { type: [serviceJobSchema], default: [] },
+
+  finalTestingActivities: { type: [finalTestingActivitySchema], default: [] },
+  finalStatus: String,
+  finalRemarks: String,
+  finalCheckedByName: String,
+  finalCheckedByDate: Date,
 }, {
   timestamps: true
 });
 
 module.exports = mongoose.model('JobCard', jobCardSchema);
-

@@ -7,6 +7,8 @@ const roleSchema = new mongoose.Schema({
     unique: true,
     uppercase: true
   },
+  label: String,
+  color: String,
   description: String,
   isSystem: {
     type: Boolean,

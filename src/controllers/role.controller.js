@@ -33,7 +33,7 @@ const getRoleMatrix = asyncHandler(async (req, res) => {
 // @desc    Create role
 // @route   POST /api/roles
 const createRole = asyncHandler(async (req, res) => {
-  const { name, description, permissions } = req.body;
+  const { name, label, color, description, permissions } = req.body;
   if (!name) return res.status(400).json({ success: false, message: 'Role name is required' });
 
   const roleName = String(name).toUpperCase();
@@ -42,6 +42,8 @@ const createRole = asyncHandler(async (req, res) => {
 
   const role = await Role.create({
     name: roleName,
+    label,
+    color,
     description,
     permissions,
     isSystem: isSystemRoleName(roleName)
@@ -61,6 +63,8 @@ const updateRole = asyncHandler(async (req, res) => {
   }
 
   if (req.body?.name) role.name = String(req.body.name).toUpperCase();
+  if (req.body?.label !== undefined) role.label = req.body.label;
+  if (req.body?.color !== undefined) role.color = req.body.color;
   if (req.body?.description !== undefined) role.description = req.body.description;
   if (req.body?.permissions) role.permissions = req.body.permissions;
 

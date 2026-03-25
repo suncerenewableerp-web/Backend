@@ -49,7 +49,7 @@ async function seed() {
   ]);
 
   // Permission Matrix (from provided RBAC table)
-  const roles = await Role.insertMany([
+const roles = await Role.insertMany([
     {
       name: "ADMIN",
       description: "Full system access",
@@ -124,83 +124,262 @@ async function seed() {
     company: "ABC Solar Pvt Ltd",
   });
 
-  // Tickets
-  const tickets = await Ticket.insertMany([
-    {
-      ticketId: "SR-2026-0001",
-      customer: {
-        name: "John Doe",
-        company: customer.company,
-        phone: "+918888877777",
-      },
-      inverter: {
-        make: "ABB",
-        model: "TRIO-50.0-TL",
-        serialNo: "ABB2023001",
-        capacity: "50kW",
-      },
-      issue: {
-        description: "Inverter shows error F001, not producing output",
-        errorCode: "F001",
-        priority: "HIGH",
-      },
-      status: "DIAGNOSIS",
-      assignedTo: [engineer._id],
-      slaStatus: "WARNING",
-      statusHistory: [{ status: "CREATED", changedBy: sales._id }],
-    },
-    {
-      ticketId: "SR-2026-0002",
-      customer: { name: "GreenTech Solutions", company: "GreenTech Solutions" },
-      inverter: {
-        make: "SMA",
-        model: "Sunny Tripower 30000TL",
-        serialNo: "SMA2024002",
-        capacity: "30kW",
-      },
-      issue: { description: "Display blank, fans running", errorCode: "E205", priority: "MEDIUM" },
-      status: "REPAIR",
-      assignedTo: [engineer._id],
-      slaStatus: "OK",
-      statusHistory: [{ status: "CREATED", changedBy: sales._id }],
-    },
-    {
-      ticketId: "SR-2026-0003",
-      customer: { name: "SunPower Ltd", company: "SunPower Ltd" },
-      inverter: { make: "Fronius", model: "Symo 15.0-3-M", serialNo: "FRO2025003", capacity: "15kW" },
-      issue: { description: "Grid fault alarm triggered continuously", errorCode: "GF-01", priority: "LOW" },
-      status: "CREATED",
-      slaStatus: "OK",
-      statusHistory: [{ status: "CREATED", changedBy: sales._id }],
-    },
-    {
-      ticketId: "SR-2026-0004",
-      customer: { name: "Rajasthan Renewables", company: "Rajasthan Renewables" },
-      inverter: { make: "Huawei", model: "SUN2000-100KTL", serialNo: "HW2023004", capacity: "100kW" },
-      issue: { description: "Overheating, thermal shutdown every afternoon", errorCode: "OT-500", priority: "HIGH" },
-      status: "TESTING",
-      assignedTo: [engineer._id],
-      slaStatus: "BREACHED",
-      statusHistory: [{ status: "CREATED", changedBy: sales._id }],
-    },
-  ]);
+  // ────────────────────────────────────────────────────────────────────────────
+  // Tickets (demo dataset for meeting showcase)
+  // Creates a realistic spread across the last 6 months with mixed statuses so
+  // Reports/SLA/Logistics screens look "alive".
+  // ────────────────────────────────────────────────────────────────────────────
 
-  // Create a JobCard + Logistics for the first ticket
-  const t0 = tickets[0];
-  const jobCard = await JobCard.create({
-    ticket: t0._id,
-    diagnosis: "Under analysis",
-    stages: [
-      { name: "Diagnosis", status: "IN_PROGRESS", assignedTo: engineer._id },
-    ],
-  });
-  const logistics = await Logistics.create({
-    ticket: t0._id,
-    type: "PICKUP",
-    status: "IN_TRANSIT",
-    courierDetails: { courierName: "BlueDart", trackingId: "BD2026031600123" },
-  });
-  await Ticket.findByIdAndUpdate(t0._id, { jobCard: jobCard._id, logistics: logistics._id });
+  const STATUS_FLOW = [
+    "CREATED",
+    "PICKUP_SCHEDULED",
+    "IN_TRANSIT",
+    "RECEIVED",
+    "DIAGNOSIS",
+    "REPAIR",
+    "TESTING",
+    "DISPATCHED",
+    "CLOSED",
+  ];
+
+  const now = new Date();
+
+  const companies = [
+    "ABC Solar Pvt Ltd",
+    "GreenTech Solutions",
+    "SunPower Ltd",
+    "Rajasthan Renewables",
+    "VoltEdge Energy",
+    "Nirma Solar",
+    "Shakti Power Systems",
+    "BlueSky EPC",
+    "Solaris Integrations",
+    "Prakash Agro",
+  ];
+
+  const inverterCatalog = [
+    { make: "ABB", model: "TRIO-50.0-TL" },
+    { make: "SMA", model: "Sunny Tripower 30000TL" },
+    { make: "Huawei", model: "SUN2000-100KTL" },
+    { make: "Fronius", model: "Symo 15.0-3-M" },
+    { make: "Sungrow", model: "SG50CX" },
+    { make: "Delta", model: "M125HV" },
+    { make: "Growatt", model: "MAX 50KTL3-X LV" },
+    { make: "GoodWe", model: "GW50K-MT" },
+  ];
+
+  const issues = [
+    { description: "Inverter shows error F001, not producing output", errorCode: "F001" },
+    { description: "Display blank, fans running", errorCode: "E205" },
+    { description: "Grid fault alarm triggered continuously", errorCode: "GF-01" },
+    { description: "Overheating, thermal shutdown every afternoon", errorCode: "OT-500" },
+    { description: "DC insulation fault during morning hours", errorCode: "ISO-12" },
+    { description: "AC contactor not engaging, intermittent trips", errorCode: "AC-07" },
+    { description: "Communication loss with logger", errorCode: "COM-19" },
+    { description: "MPPT voltage mismatch warning", errorCode: "MPPT-03" },
+    { description: "Earth leakage detected on startup", errorCode: "EL-11" },
+    { description: "No power output, relay test failed", errorCode: "RLY-02" },
+  ];
+
+  const priorities = ["LOW", "MEDIUM", "HIGH"];
+
+  function pad4(n) {
+    return String(n).padStart(4, "0");
+  }
+
+  function addDays(date, d) {
+    const out = new Date(date.getTime());
+    out.setUTCDate(out.getUTCDate() + d);
+    return out;
+  }
+
+  function monthStartUTC(year, monthIdx0) {
+    return new Date(Date.UTC(year, monthIdx0, 1, 9, 30, 0)); // 9:30 AM IST-ish in UTC for stable sorting
+  }
+
+  function flowUpTo(finalStatus) {
+    const idx = STATUS_FLOW.indexOf(finalStatus);
+    if (idx === -1) return ["CREATED"];
+    return STATUS_FLOW.slice(0, idx + 1);
+  }
+
+  function statusHistoryFromFlow(flow, createdAt, changedBy) {
+    return flow.map((status, i) => ({
+      status,
+      changedBy,
+      changedAt: addDays(createdAt, i),
+    }));
+  }
+
+  function pickFinalStatus(monthIndexFromOldest, itemIndexInMonth) {
+    // Older months have more completed tickets; newer months have more active ones.
+    if (monthIndexFromOldest <= 1) return itemIndexInMonth % 2 === 0 ? "CLOSED" : "DISPATCHED";
+    if (monthIndexFromOldest === 2) return ["CLOSED", "TESTING", "REPAIR", "DIAGNOSIS"][itemIndexInMonth % 4];
+    if (monthIndexFromOldest === 3) return ["DISPATCHED", "TESTING", "REPAIR", "DIAGNOSIS"][itemIndexInMonth % 4];
+    if (monthIndexFromOldest === 4) return ["RECEIVED", "IN_TRANSIT", "PICKUP_SCHEDULED", "DIAGNOSIS"][itemIndexInMonth % 4];
+    return ["CREATED", "PICKUP_SCHEDULED", "IN_TRANSIT", "RECEIVED"][itemIndexInMonth % 4];
+  }
+
+  function pickSlaStatus(finalStatus, priority, monthIndexFromOldest, itemIndexInMonth) {
+    // Mix of OK/WARNING/BREACHED for demo.
+    if (finalStatus === "CLOSED") return itemIndexInMonth % 5 === 0 ? "BREACHED" : "OK";
+    if (finalStatus === "DISPATCHED") return itemIndexInMonth % 4 === 0 ? "WARNING" : "OK";
+    if (monthIndexFromOldest <= 2 && (priority === "HIGH" || priority === "MEDIUM")) {
+      return itemIndexInMonth % 3 === 0 ? "BREACHED" : "WARNING";
+    }
+    return itemIndexInMonth % 3 === 0 ? "WARNING" : "OK";
+  }
+
+  const monthsToSeed = 6; // Oct -> Mar style spread for reports
+  const monthBases = [];
+  // Build starting from current month backwards, then reverse to oldest-first
+  for (let i = monthsToSeed - 1; i >= 0; i -= 1) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
+    d.setUTCMonth(d.getUTCMonth() - i);
+    monthBases.push(monthStartUTC(d.getUTCFullYear(), d.getUTCMonth()));
+  }
+
+  const ticketsPayload = [];
+  let seq = 1;
+  for (let monthIndex = 0; monthIndex < monthBases.length; monthIndex += 1) {
+    const base = monthBases[monthIndex];
+    for (let j = 0; j < 6; j += 1) {
+      const createdAt = addDays(base, 2 + j * 4);
+      const company = companies[(monthIndex * 3 + j) % companies.length];
+      const personName =
+        company === customer.company
+          ? customer.name
+          : ["Aman", "Neha", "Ravi", "Pooja", "Irfan", "Meera", "Karan", "Sana"][((monthIndex + 1) * (j + 2)) % 8];
+      const inv = inverterCatalog[(monthIndex * 5 + j) % inverterCatalog.length];
+      const issue = issues[(monthIndex * 4 + j) % issues.length];
+      const priority = priorities[(monthIndex + j) % priorities.length];
+      const finalStatus = pickFinalStatus(monthIndex, j);
+      const flow = flowUpTo(finalStatus);
+      const statusHistory = statusHistoryFromFlow(flow, createdAt, sales._id);
+      const lastChangedAt = statusHistory[statusHistory.length - 1].changedAt;
+
+      const inWarranty = (monthIndex + j) % 2 === 0;
+      const warrantyEnd = inWarranty ? addDays(now, 180) : addDays(now, -60);
+
+      const ticketId = `SR-${now.getUTCFullYear()}-${pad4(seq)}`;
+      seq += 1;
+
+      ticketsPayload.push({
+        ticketId,
+        customer: {
+          name: company === customer.company ? customer.name : `${personName} (${company})`,
+          company,
+          phone: `+91${String(9000000000 + ((monthIndex * 17 + j * 91) % 999999999)).padStart(10, "0")}`,
+        },
+        inverter: {
+          make: inv.make,
+          model: inv.model,
+          serialNo: `${inv.make.slice(0, 3).toUpperCase()}-${now.getUTCFullYear()}-${pad4(seq + j)}`,
+          capacity: ["10kW", "15kW", "30kW", "50kW", "100kW"][(monthIndex + j) % 5],
+          warrantyEnd,
+        },
+        issue: {
+          description: issue.description,
+          errorCode: issue.errorCode,
+          priority,
+        },
+        status: finalStatus,
+        assignedTo: [engineer._id],
+        slaStatus: pickSlaStatus(finalStatus, priority, monthIndex, j),
+        slaTargetDate: addDays(createdAt, priority === "HIGH" ? 2 : priority === "MEDIUM" ? 3 : 5),
+        statusHistory,
+        createdAt,
+        updatedAt: lastChangedAt,
+      });
+    }
+  }
+
+  const tickets = await Ticket.insertMany(ticketsPayload);
+
+  // Create JobCards + Logistics for a subset (for nice drill-down in meeting)
+  const demoTicketIds = tickets
+    .filter((t, idx) => idx % 4 === 0)
+    .slice(0, 10)
+    .map((t) => t._id);
+
+  for (const ticketObjectId of demoTicketIds) {
+    const ticketDoc = await Ticket.findById(ticketObjectId);
+    if (!ticketDoc) continue;
+
+    const jc = await JobCard.create({
+      ticket: ticketDoc._id,
+      jobNo: `JC-${ticketDoc.ticketId}`,
+      item: "Solar Inverter",
+      itemAndSiteDetails: `Site: ${ticketDoc.customer?.company || ticketDoc.customer?.name || "—"}`,
+      customerName: ticketDoc.customer?.name || "",
+      inDate: addDays(ticketDoc.createdAt, 2),
+      outDate: ticketDoc.status === "CLOSED" ? addDays(ticketDoc.createdAt, 7) : null,
+      currentStatus: ticketDoc.status,
+      remarks: "Seeded demo job card for showcase.",
+      checkedByName: "QA Team",
+      checkedByDate: addDays(ticketDoc.createdAt, 6),
+      diagnosis: "Initial inspection completed; parts verified.",
+      stages: [
+        { name: "Diagnosis", status: "COMPLETE", assignedTo: engineer._id, completedAt: addDays(ticketDoc.createdAt, 3) },
+        { name: "Repair", status: ticketDoc.status === "REPAIR" || ticketDoc.status === "TESTING" || ticketDoc.status === "DISPATCHED" || ticketDoc.status === "CLOSED" ? "COMPLETE" : "PENDING", assignedTo: engineer._id },
+        { name: "Testing", status: ticketDoc.status === "TESTING" || ticketDoc.status === "DISPATCHED" || ticketDoc.status === "CLOSED" ? "IN_PROGRESS" : "PENDING", assignedTo: engineer._id },
+      ],
+      serviceJobs: [
+        {
+          sn: 1,
+          jobName: "Visual inspection",
+          specification: "Check connectors, PCB, dust",
+          qty: 1,
+          reason: ticketDoc.issue?.errorCode || "",
+          date: addDays(ticketDoc.createdAt, 3),
+          doneBy: engineer.name,
+        },
+        {
+          sn: 2,
+          jobName: "Firmware check",
+          specification: "Version + parameter reset if required",
+          qty: 1,
+          reason: "Prevent recurring fault",
+          date: addDays(ticketDoc.createdAt, 4),
+          doneBy: engineer.name,
+        },
+      ],
+      testResults: "Basic functional tests passed (seed).",
+      warrantyGiven: 6,
+      testedBy: engineer._id,
+      finalStatus: ticketDoc.status === "CLOSED" ? "PASS" : "",
+      finalRemarks: ticketDoc.status === "CLOSED" ? "Ready for dispatch (seed)." : "",
+      finalCheckedByName: ticketDoc.status === "CLOSED" ? "QA Team" : "",
+      finalCheckedByDate: ticketDoc.status === "CLOSED" ? addDays(ticketDoc.createdAt, 7) : null,
+    });
+
+    // Logistics record for non-created tickets (optional but useful for backend realism)
+    if (ticketDoc.status !== "CREATED") {
+      const log = await Logistics.create({
+        ticket: ticketDoc._id,
+        type: "PICKUP",
+        status:
+          ticketDoc.status === "IN_TRANSIT"
+            ? "IN_TRANSIT"
+            : ticketDoc.status === "RECEIVED" || ticketDoc.status === "DIAGNOSIS" || ticketDoc.status === "REPAIR" || ticketDoc.status === "TESTING"
+              ? "DELIVERED"
+              : "SCHEDULED",
+        courierDetails: {
+          courierName: "BlueDart",
+          trackingId: `BD-${ticketDoc.ticketId}`,
+        },
+        pickupDetails: {
+          scheduledDate: addDays(ticketDoc.createdAt, 1),
+          actualPickupDate: addDays(ticketDoc.createdAt, 2),
+          pickupBy: engineer.name,
+          pickupLocation: ticketDoc.customer?.company || ticketDoc.customer?.name || "",
+        },
+      });
+      await Ticket.findByIdAndUpdate(ticketDoc._id, { jobCard: jc._id, logistics: log._id });
+    } else {
+      await Ticket.findByIdAndUpdate(ticketDoc._id, { jobCard: jc._id });
+    }
+  }
 
   console.log("✅ Seed complete!");
   console.log("👥 Roles:", roles.length);
@@ -222,4 +401,3 @@ seed()
     console.error("❌ Seed failed:", err);
     process.exit(1);
   });
-

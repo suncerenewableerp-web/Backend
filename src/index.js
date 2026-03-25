@@ -14,6 +14,7 @@ const roleRoutes = require("./routes/role.routes");
 const logisticsRoutes = require("./routes/logistics.routes");
 const jobcardRoutes = require("./routes/jobcard.routes");
 const slaRoutes = require("./routes/sla.routes");
+const settingsRoutes = require("./routes/settings.routes");
 const reportRoutes = require("./routes/report.routes");
 const dashboardRoutes = require("./routes/dashboard.routes");
 
@@ -98,6 +99,7 @@ app.use("/api/roles", roleRoutes);
 app.use("/api/logistics", logisticsRoutes);
 app.use("/api/jobcards", jobcardRoutes);
 app.use("/api/sla", slaRoutes);
+app.use("/api/settings", settingsRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 

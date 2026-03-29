@@ -21,43 +21,43 @@ Express + MongoDB REST API for the Sunce Solar Inverter Service Management Platf
 ## Project Structure
 
 ```
-backend/
+backend/Backend/
 ├── src/
-│   ├── index.js                  # App entry point
+│   ├── index.ts                  # App entry point
 │   ├── config/
-│   │   └── seed.js               # DB seed script
+│   │   └── seed.ts               # DB seed script
 │   ├── controllers/
-│   │   ├── auth.controller.js
-│   │   ├── user.controller.js
-│   │   ├── ticket.controller.js
-│   │   ├── role.controller.js
-│   │   ├── jobcard.controller.js
-│   │   ├── logistics.controller.js
-│   │   ├── sla.controller.js
-│   │   ├── report.controller.js
-│   │   └── dashboard.controller.js
+│   │   ├── auth.controller.ts
+│   │   ├── user.controller.ts
+│   │   ├── ticket.controller.ts
+│   │   ├── role.controller.ts
+│   │   ├── jobcard.controller.ts
+│   │   ├── logistics.controller.ts
+│   │   ├── sla.controller.ts
+│   │   ├── report.controller.ts
+│   │   └── dashboard.controller.ts
 │   ├── models/
-│   │   ├── User.model.js
-│   │   ├── Role.model.js
-│   │   ├── Ticket.model.js
-│   │   ├── JobCard.model.js
-│   │   └── Logistics.model.js
+│   │   ├── User.model.ts
+│   │   ├── Role.model.ts
+│   │   ├── Ticket.model.ts
+│   │   ├── JobCard.model.ts
+│   │   └── Logistics.model.ts
 │   ├── routes/
-│   │   ├── auth.routes.js
-│   │   ├── user.routes.js
-│   │   ├── ticket.routes.js
-│   │   ├── role.routes.js
-│   │   ├── jobcard.routes.js
-│   │   ├── logistics.routes.js
-│   │   ├── sla.routes.js
-│   │   ├── report.routes.js
-│   │   └── dashboard.routes.js
+│   │   ├── auth.routes.ts
+│   │   ├── user.routes.ts
+│   │   ├── ticket.routes.ts
+│   │   ├── role.routes.ts
+│   │   ├── jobcard.routes.ts
+│   │   ├── logistics.routes.ts
+│   │   ├── sla.routes.ts
+│   │   ├── report.routes.ts
+│   │   └── dashboard.routes.ts
 │   ├── middleware/
-│   │   ├── auth.middleware.js    # JWT verify + permission check
-│   │   ├── error.middleware.js   # Global error handler
-│   │   └── validate.middleware.js
+│   │   ├── auth.middleware.ts    # JWT verify + permission check
+│   │   ├── error.middleware.ts   # Global error handler
+│   │   └── validate.middleware.ts
 │   └── utils/
-│       └── helpers.js
+│       └── helpers.ts
 ├── uploads/                      # File uploads (gitignored)
 ├── .env.example
 ├── .gitignore
@@ -70,7 +70,7 @@ backend/
 
 ### 1. Install dependencies
 ```bash
-cd backend
+cd backend/Backend
 npm install
 ```
 

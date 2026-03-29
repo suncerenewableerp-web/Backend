@@ -2,13 +2,14 @@
   "name": "sunce-erp-backend",
   "version": "1.0.0",
   "description": "Sunce ERP Backend — Solar Inverter Service Platform",
-  "main": "src/index.js",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
-    "build": "rm -rf dist && mkdir dist && cp -r src dist && cp package.json dist && cp README.md dist && echo 'Dist created successfully'",
-    "seed": "node src/config/seed.js",
-    "seed:rbac": "node src/config/seed.rbac.js"
+    "prestart": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "seed": "ts-node src/config/seed.ts",
+    "seed:rbac": "ts-node src/config/seed.rbac.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -24,7 +25,15 @@
     "winston": "^3.13.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0"
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/morgan": "^1.9.9",
+    "@types/node": "^20.17.30",
+    "nodemon": "^3.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
   },
   "engines": {
     "node": ">=18.0.0"

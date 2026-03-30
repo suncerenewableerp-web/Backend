@@ -43,6 +43,11 @@ export const verifyToken = asyncHandler(async (req: ReqWithUser, res: Response, 
 export const authorize = (module: string, action: string) => {
   return asyncHandler(async (req: ReqWithUser, res: Response, next: NextFunction) => {
     const role = req.user?.role;
+    const roleName = String(role?.name || "").toUpperCase();
+
+    // Business rule: SALES should have ADMIN-like access for tickets.
+    // Keep it scoped to ticket actions only (other modules still depend on RBAC matrix).
+    if (module === "tickets" && roleName === "SALES") return next();
     
     if (!role.permissions[module]?.[action]) {
       return res.status(403).json({
@@ -55,4 +60,3 @@ export const authorize = (module: string, action: string) => {
     next();
   });
 };
-

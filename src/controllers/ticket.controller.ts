@@ -154,6 +154,8 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   // Extra safety beyond RBAC: enforce *which fields* each role can modify.
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const topKeys = Object.keys(body);
+  const roleNorm = String(roleName || "").toUpperCase();
+  const isTicketAdmin = roleNorm === "ADMIN" || roleNorm === "SALES";
   const ALLOWED_STATUSES = new Set([
     'CREATED',
     'PICKUP_SCHEDULED',
@@ -171,21 +173,7 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
     body.status = next;
   }
 
-  if (roleName === 'SALES') {
-    const allowedTop = new Set(['issue']);
-    const disallowedTop = topKeys.filter((k) => !allowedTop.has(k));
-    const issue = body.issue && typeof body.issue === 'object' ? body.issue : null;
-    const issueKeys = issue ? Object.keys(issue) : [];
-    const disallowedIssue = issueKeys.filter((k) => k !== 'description');
-    if (disallowedTop.length || disallowedIssue.length) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied: Sales can only update fault description.',
-      });
-    }
-  }
-
-  if (roleName === 'ENGINEER') {
+  if (roleNorm === 'ENGINEER') {
     const allowedTop = new Set(['status']);
     const disallowedTop = topKeys.filter((k) => !allowedTop.has(k));
     if (disallowedTop.length) {
@@ -196,14 +184,14 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
     }
   }
 
-  if (roleName !== 'ADMIN' && roleName !== 'SALES' && roleName !== 'ENGINEER') {
+  if (!isTicketAdmin && roleNorm !== 'ENGINEER') {
     // Customers and unknown roles should never reach here (RBAC), but keep hard guard.
     return res.status(403).json({ success: false, message: 'Access denied.' });
   }
 
   const prevStatus = ticket.status;
 
-  if (roleName === 'ADMIN') {
+  if (isTicketAdmin) {
     if (Object.prototype.hasOwnProperty.call(body, 'status')) ticket.set('status', body.status);
     if (Object.prototype.hasOwnProperty.call(body, 'slaStatus')) ticket.set('slaStatus', body.slaStatus);
     if (Object.prototype.hasOwnProperty.call(body, 'slaTargetDate')) ticket.set('slaTargetDate', body.slaTargetDate);
@@ -236,13 +224,7 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
     if (Object.prototype.hasOwnProperty.call(body, 'feedbackRating')) ticket.set('feedbackRating', body.feedbackRating);
   }
 
-  if (roleName === 'SALES') {
-    if (body.issue && typeof body.issue === 'object' && Object.prototype.hasOwnProperty.call(body.issue, 'description')) {
-      ticket.set('issue.description', body.issue.description);
-    }
-  }
-
-  if (roleName === 'ENGINEER') {
+  if (roleNorm === 'ENGINEER') {
     if (Object.prototype.hasOwnProperty.call(body, 'status')) ticket.set('status', body.status);
   }
 

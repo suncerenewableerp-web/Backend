@@ -28,7 +28,15 @@ exports.signup = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const phoneNorm = normalizeOptionalString(phone);
     const companyNorm = normalizeOptionalString(company);
     const nameNorm = String(name || '').trim();
-    const roleNorm = String(role || '').trim().toUpperCase();
+    const roleNorm = String(role || 'CUSTOMER').trim().toUpperCase();
+    // Public signup is restricted to CUSTOMER accounts only.
+    // Internal roles (ADMIN/SALES/ENGINEER/others) must be provisioned by an admin.
+    if (roleNorm !== "CUSTOMER") {
+        return res.status(403).json({
+            success: false,
+            message: "Only CUSTOMER signup is allowed. Please contact an administrator for access.",
+        });
+    }
     const userExists = await User_model_1.default.findOne({ email: emailNorm });
     if (userExists)
         return res.status(400).json({ success: false, message: 'User already exists' });

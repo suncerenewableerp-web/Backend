@@ -1,7 +1,7 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { signup, login, refresh } from "../controllers/auth.controller";
-import { validate, validateEmail, validatePassword } from "../middleware/validate.middleware";
+import { signup, login, refresh, forgotPassword, resetPassword } from "../controllers/auth.controller";
+import { validate, validateEmail, validatePassword, validateResetToken } from "../middleware/validate.middleware";
 
 const router = express.Router();
 
@@ -40,5 +40,7 @@ router.use(authIpLimiter);
 router.post('/signup', validate([validateEmail, validatePassword]), signup);
 router.post('/login', loginAttemptLimiter, login);
 router.post('/refresh', refresh);
+router.post('/forgot-password', validate([validateEmail]), forgotPassword);
+router.post('/reset-password', validate([validateResetToken, validatePassword]), resetPassword);
 
 export default router;

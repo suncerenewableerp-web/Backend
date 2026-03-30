@@ -4,7 +4,11 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
-import "dotenv/config";
+import dotenv from "dotenv";
+import path from "path";
+
+// Load `.env` reliably whether running `src` (ts-node) or `dist` (node).
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 // Import routes (will create later)
 import authRoutes from "./routes/auth.routes";
@@ -85,12 +89,19 @@ app.use("/uploads", express.static("../uploads"));
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
+  const conn = mongoose.connection;
   res.json({
     success: true,
     message: "Sunce ERP API is running",
     environment: process.env.NODE_ENV,
     timestamp: new Date().toISOString(),
     version: "1.0.0",
+    db: {
+      readyState: conn.readyState, // 0=disconnected,1=connected,2=connecting,3=disconnecting
+      name: conn.name,
+      host: conn.host,
+      port: conn.port,
+    },
   });
 });
 

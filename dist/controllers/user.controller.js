@@ -8,7 +8,8 @@ const User_model_1 = __importDefault(require("../models/User.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
-const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+const emailAddress_1 = require("../utils/emailAddress");
+const normalizeEmail = (email) => (0, emailAddress_1.normalizeEmailForStorage)(email);
 const normalizeOptionalString = (v) => {
     if (v === undefined || v === null)
         return undefined;
@@ -56,7 +57,10 @@ exports.createUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     if (!roleNorm) {
         return res.status(400).json({ success: false, message: "Role is required" });
     }
-    const userExists = await User_model_1.default.findOne({ email: emailNorm });
+    const userExists = await User_model_1.default.findOne({ email: { $in: (0, emailAddress_1.emailLookupCandidates)(email) } }).collation({
+        locale: "en",
+        strength: 2,
+    });
     if (userExists) {
         return res.status(400).json({ success: false, message: "User already exists" });
     }
@@ -74,8 +78,10 @@ exports.createUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             phone: phoneNorm,
             company: companyNorm,
         });
+        user.save();
     }
     catch (err) {
+        console.log(err);
         if (err?.code === 11000) {
             return res.status(400).json({ success: false, message: "User already exists" });
         }
@@ -94,15 +100,22 @@ exports.setUserPassword = (0, error_middleware_1.asyncHandler)(async (req, res) 
     if (!userId) {
         return res.status(400).json({ success: false, message: "User id is required" });
     }
-    if (!oldPassword) {
-        return res.status(400).json({ success: false, message: "Old password is required" });
-    }
     if (!newPassword || newPassword.length < 6) {
         return res.status(400).json({ success: false, message: "New password must be at least 6 characters" });
     }
     const user = await User_model_1.default.findById(userId).select("+password").populate("role", "name");
     if (!user) {
         return res.status(404).json({ success: false, message: "User not found" });
+    }
+    const targetRoleName = String(user?.role?.name || "").toUpperCase();
+    if (targetRoleName !== "CUSTOMER") {
+        return res.status(403).json({
+            success: false,
+            message: "Old-password change is only allowed for CUSTOMER. Use admin reset for internal users.",
+        });
+    }
+    if (!oldPassword) {
+        return res.status(400).json({ success: false, message: "Old password is required" });
     }
     const ok = await user.comparePassword(oldPassword);
     if (!ok) {

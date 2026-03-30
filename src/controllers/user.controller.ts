@@ -2,9 +2,9 @@ import User from "../models/User.model";
 import Role from "../models/Role.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
+import { emailLookupCandidates, normalizeEmailForStorage } from "../utils/emailAddress";
 
-const normalizeEmail = (email: unknown) =>
-  String(email || "").trim().toLowerCase();
+const normalizeEmail = (email: unknown) => normalizeEmailForStorage(email);
 const normalizeOptionalString = (v: unknown) => {
   if (v === undefined || v === null) return undefined;
   const s = String(v).trim();
@@ -59,7 +59,10 @@ export const createUser = asyncHandler(async (req: any, res: any) => {
     return res.status(400).json({ success: false, message: "Role is required" });
   }
 
-  const userExists = await User.findOne({ email: emailNorm });
+  const userExists = await User.findOne({ email: { $in: emailLookupCandidates(email) } }).collation({
+    locale: "en",
+    strength: 2,
+  });
   if (userExists) {
     return res.status(400).json({ success: false, message: "User already exists" });
   }
@@ -79,7 +82,9 @@ export const createUser = asyncHandler(async (req: any, res: any) => {
       phone: phoneNorm,
       company: companyNorm,
     });
+    user.save()
   } catch (err: any) {
+    console.log(err);
     if (err?.code === 11000) {
       return res.status(400).json({ success: false, message: "User already exists" });
     }
@@ -102,9 +107,6 @@ export const setUserPassword = asyncHandler(async (req: any, res: any) => {
   if (!userId) {
     return res.status(400).json({ success: false, message: "User id is required" });
   }
-  if (!oldPassword) {
-    return res.status(400).json({ success: false, message: "Old password is required" });
-  }
   if (!newPassword || newPassword.length < 6) {
     return res.status(400).json({ success: false, message: "New password must be at least 6 characters" });
   }
@@ -112,6 +114,18 @@ export const setUserPassword = asyncHandler(async (req: any, res: any) => {
   const user: any = await User.findById(userId).select("+password").populate("role", "name");
   if (!user) {
     return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  const targetRoleName = String(user?.role?.name || "").toUpperCase();
+  if (targetRoleName !== "CUSTOMER") {
+    return res.status(403).json({
+      success: false,
+      message: "Old-password change is only allowed for CUSTOMER. Use admin reset for internal users.",
+    });
+  }
+
+  if (!oldPassword) {
+    return res.status(400).json({ success: false, message: "Old password is required" });
   }
 
   const ok = await user.comparePassword(oldPassword);

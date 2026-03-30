@@ -83,6 +83,7 @@ cp .env.example .env
 Notes:
 - If you deploy behind a reverse proxy/load balancer, set `TRUST_PROXY=1` so `req.ip` and rate limiting work per-client.
 - If many users login from the same network/IP (office Wi‑Fi), increase `AUTH_RATE_LIMIT_MAX` (and optionally `RATE_LIMIT_MAX`) in `.env`.
+- To enable password reset emails, set `SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS` (or `SMTP_URL`) and `SMTP_FROM` in `.env`.
 
 ### 3. Seed the database
 ```bash

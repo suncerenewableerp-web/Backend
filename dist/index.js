@@ -9,7 +9,10 @@ const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const morgan_1 = __importDefault(require("morgan"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
-require("dotenv/config");
+const dotenv_1 = __importDefault(require("dotenv"));
+const path_1 = __importDefault(require("path"));
+// Load `.env` reliably whether running `src` (ts-node) or `dist` (node).
+dotenv_1.default.config({ path: path_1.default.resolve(__dirname, "..", ".env") });
 // Import routes (will create later)
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
 const user_routes_1 = __importDefault(require("./routes/user.routes"));
@@ -82,12 +85,19 @@ if (process.env.NODE_ENV !== "test") {
 app.use("/uploads", express_1.default.static("../uploads"));
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
+    const conn = mongoose_1.default.connection;
     res.json({
         success: true,
         message: "Sunce ERP API is running",
         environment: process.env.NODE_ENV,
         timestamp: new Date().toISOString(),
         version: "1.0.0",
+        db: {
+            readyState: conn.readyState, // 0=disconnected,1=connected,2=connecting,3=disconnecting
+            name: conn.name,
+            host: conn.host,
+            port: conn.port,
+        },
     });
 });
 // ─── API ROUTES ───────────────────────────────────────────────────────────────

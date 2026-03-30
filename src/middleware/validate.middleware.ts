@@ -24,4 +24,8 @@ export const validate = (validations: any[]) => {
 export const validateTicketId = param("id").isMongoId().withMessage("Valid ticket ID required");
 export const validateEmail = body("email").isEmail().normalizeEmail().withMessage("Valid email required");
 export const validatePassword = body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 chars");
-
+export const validateResetToken = body("token")
+  .isString()
+  .trim()
+  .isLength({ min: 10 })
+  .withMessage("Reset token is required");

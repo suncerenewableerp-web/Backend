@@ -40,4 +40,6 @@ router.use(authIpLimiter);
 router.post('/signup', (0, validate_middleware_1.validate)([validate_middleware_1.validateEmail, validate_middleware_1.validatePassword]), auth_controller_1.signup);
 router.post('/login', loginAttemptLimiter, auth_controller_1.login);
 router.post('/refresh', auth_controller_1.refresh);
+router.post('/forgot-password', (0, validate_middleware_1.validate)([validate_middleware_1.validateEmail]), auth_controller_1.forgotPassword);
+router.post('/reset-password', (0, validate_middleware_1.validate)([validate_middleware_1.validateResetToken, validate_middleware_1.validatePassword]), auth_controller_1.resetPassword);
 exports.default = router;

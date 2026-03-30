@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validatePassword = exports.validateEmail = exports.validateTicketId = exports.validate = void 0;
+exports.validateResetToken = exports.validatePassword = exports.validateEmail = exports.validateTicketId = exports.validate = void 0;
 // Generic validation middleware - attach to routes
 const express_validator_1 = require("express-validator");
 const validate = (validations) => {
@@ -23,3 +23,8 @@ exports.validate = validate;
 exports.validateTicketId = (0, express_validator_1.param)("id").isMongoId().withMessage("Valid ticket ID required");
 exports.validateEmail = (0, express_validator_1.body)("email").isEmail().normalizeEmail().withMessage("Valid email required");
 exports.validatePassword = (0, express_validator_1.body)("password").isLength({ min: 6 }).withMessage("Password must be at least 6 chars");
+exports.validateResetToken = (0, express_validator_1.body)("token")
+    .isString()
+    .trim()
+    .isLength({ min: 10 })
+    .withMessage("Reset token is required");

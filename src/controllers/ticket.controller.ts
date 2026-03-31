@@ -3,6 +3,7 @@ import JobCard from "../models/JobCard.model";
 import Logistics from "../models/Logistics.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
+import { cloudinary, ensureCloudinaryConfigured } from "../config/cloudinary";
 
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
   { sr: 1, activity: 'Continuity test of AC side', result: '' },
@@ -400,11 +401,36 @@ export const uploadTicketPickupDocument = asyncHandler(async (req: any, res: any
   if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
 
   const file = req.file;
-  if (!file || !file.filename) {
+  if (!file || !file.buffer) {
     return res.status(400).json({ success: false, message: "Missing file upload" });
   }
 
-  const urlPath = `/uploads/pickup/${file.filename}`;
+  ensureCloudinaryConfigured();
+  const folder = String(process.env.CLOUDINARY_FOLDER || "sunce_erp/pickup").trim() || "sunce_erp/pickup";
+  const ticketSeg = String(req.params?.id || "ticket")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .slice(0, 40);
+  const stamp = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const publicId = `${ticketSeg}_${stamp}`;
+
+  const uploaded = await new Promise<{ secure_url: string }>((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        public_id: publicId,
+        resource_type: "auto", // supports pdf/images
+      },
+      (err, result) => {
+        if (err) return reject(err);
+        if (!result || !result.secure_url) return reject(new Error("Cloudinary upload failed"));
+        resolve({ secure_url: String((result as any).secure_url) });
+      },
+    );
+    stream.end(file.buffer);
+  });
+
+  const urlPath = uploaded.secure_url;
 
   const pickup = await Logistics.findOneAndUpdate(
     { ticket: ticket._id, type: "PICKUP" },

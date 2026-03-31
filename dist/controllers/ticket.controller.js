@@ -9,6 +9,7 @@ const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
+const cloudinary_1 = require("../config/cloudinary");
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
     { sr: 1, activity: 'Continuity test of AC side', result: '' },
     { sr: 2, activity: 'Continuity test of DC side', result: '' },
@@ -377,10 +378,32 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
     const file = req.file;
-    if (!file || !file.filename) {
+    if (!file || !file.buffer) {
         return res.status(400).json({ success: false, message: "Missing file upload" });
     }
-    const urlPath = `/uploads/pickup/${file.filename}`;
+    (0, cloudinary_1.ensureCloudinaryConfigured)();
+    const folder = String(process.env.CLOUDINARY_FOLDER || "sunce_erp/pickup").trim() || "sunce_erp/pickup";
+    const ticketSeg = String(req.params?.id || "ticket")
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]+/g, "_")
+        .slice(0, 40);
+    const stamp = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const publicId = `${ticketSeg}_${stamp}`;
+    const uploaded = await new Promise((resolve, reject) => {
+        const stream = cloudinary_1.cloudinary.uploader.upload_stream({
+            folder,
+            public_id: publicId,
+            resource_type: "auto", // supports pdf/images
+        }, (err, result) => {
+            if (err)
+                return reject(err);
+            if (!result || !result.secure_url)
+                return reject(new Error("Cloudinary upload failed"));
+            resolve({ secure_url: String(result.secure_url) });
+        });
+        stream.end(file.buffer);
+    });
+    const urlPath = uploaded.secure_url;
     const pickup = await Logistics_model_1.default.findOneAndUpdate({ ticket: ticket._id, type: "PICKUP" }, {
         $setOnInsert: {
             ticket: ticket._id,

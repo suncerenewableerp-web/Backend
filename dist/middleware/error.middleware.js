@@ -10,6 +10,13 @@ exports.asyncHandler = asyncHandler;
 const errorHandler = (err, req, res, next) => {
     void next;
     console.error("❌ Error:", err?.stack || err);
+    // Multer errors (file uploads)
+    if (err?.name === "MulterError") {
+        const msg = err?.code === "LIMIT_FILE_SIZE"
+            ? "File too large"
+            : err?.message || "Upload failed";
+        return res.status(400).json({ success: false, message: msg });
+    }
     // Validation errors
     if (err?.name === "ValidationError") {
         return res.status(400).json({

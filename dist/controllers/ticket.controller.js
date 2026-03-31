@@ -3,9 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateTicketJobCard = exports.getTicketJobCard = exports.updateTicket = exports.getTicket = exports.createTicket = exports.getTickets = void 0;
+exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.updateTicket = exports.getTicket = exports.createTicket = exports.getTickets = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
+const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
@@ -37,7 +38,7 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             ] })
     };
     // Role-scoped visibility
-    const roleName = req.user?.role?.name;
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
     if (roleName === 'ENGINEER') {
         query.assignedTo = req.user._id;
     }
@@ -60,12 +61,17 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             ...(existingSearchOr ? [{ $or: existingSearchOr }] : []),
         ];
     }
-    const tickets = await Ticket_model_1.default.find(query)
+    const ticketsQuery = Ticket_model_1.default.find(query)
         .populate('assignedTo', 'name')
         .populate('statusHistory.changedBy', 'name')
         .sort('-createdAt')
         .skip(skip)
         .limit(lim);
+    if (roleName === "CUSTOMER") {
+        // Customers must never see warranty validity/dates.
+        ticketsQuery.select("-inverter.warrantyEnd");
+    }
+    const tickets = await ticketsQuery;
     const total = await Ticket_model_1.default.countDocuments(query);
     res.json({
         success: true,
@@ -111,10 +117,19 @@ function normalizeFlowStatus(raw) {
         return 'UNDER_REPAIRED';
     return 'CREATED';
 }
+function toDateOrNull(v) {
+    if (!v)
+        return null;
+    const d = new Date(v);
+    const t = d.getTime();
+    if (Number.isNaN(t))
+        return null;
+    return d;
+}
 // @desc    Create ticket
 // @route   POST /api/tickets
 exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleName = req.user?.role?.name;
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
     const body = { ...(req.body || {}) };
     // If a customer raises a ticket, bind it to their identity so they can
     // consistently see it later (and can't spoof another customer).
@@ -136,16 +151,28 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         statusHistory: [{ status: 'CREATED', changedBy: req.user._id }]
     });
     await ticket.populate('statusHistory.changedBy', 'name');
-    res.status(201).json({ success: true, data: ticket });
+    const data = ticket.toObject();
+    if (roleName === "CUSTOMER") {
+        if (data?.inverter && Object.prototype.hasOwnProperty.call(data.inverter, "warrantyEnd")) {
+            delete data.inverter.warrantyEnd;
+        }
+    }
+    res.status(201).json({ success: true, data });
 });
 // @desc    Get single ticket
 // @route   GET /api/tickets/:id
 exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const ticketQuery = Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
         .populate('assignedTo', 'name')
         .populate('jobCard')
         .populate('logistics')
         .populate('statusHistory.changedBy', 'name');
+    if (roleName === "CUSTOMER") {
+        // Customers must never see warranty validity/dates.
+        ticketQuery.select("-inverter.warrantyEnd");
+    }
+    const ticket = await ticketQuery;
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
     res.json({ success: true, data: ticket });
@@ -272,6 +299,105 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
     await ticket.populate('statusHistory.changedBy', 'name');
     await ticket.populate('logistics');
     res.json({ success: true, data: ticket });
+});
+// @desc    Get pickup details for a ticket (customer-friendly)
+// @route   GET /api/tickets/:id/pickup-details
+exports.getTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    const pickup = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "PICKUP" }).sort("-updatedAt");
+    res.json({
+        success: true,
+        data: {
+            pickupDate: pickup?.pickupDetails?.scheduledDate || null,
+            pickupLocation: String(pickup?.pickupDetails?.pickupLocation || ticket.customer?.address || ""),
+            documents: Array.isArray(pickup?.documents) ? pickup?.documents : [],
+        },
+    });
+});
+// @desc    Upsert pickup details for a ticket (customer input)
+// @route   POST /api/tickets/:id/pickup-details
+exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "CUSTOMER") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+    }
+    const pickupDate = toDateOrNull(req.body?.pickupDate);
+    const pickupLocation = String(req.body?.pickupLocation || "").trim();
+    if (!pickupDate) {
+        return res.status(400).json({ success: false, message: "pickupDate is required" });
+    }
+    if (!pickupLocation) {
+        return res.status(400).json({ success: false, message: "pickupLocation is required" });
+    }
+    const s = String(ticket.status || "").toUpperCase();
+    if (!["CREATED", "PICKUP_SCHEDULED"].includes(s)) {
+        return res.status(400).json({
+            success: false,
+            message: "Pickup details can be updated only when the ticket is CREATED or PICKUP_SCHEDULED.",
+        });
+    }
+    const pickup = await Logistics_model_1.default.findOneAndUpdate({ ticket: ticket._id, type: "PICKUP" }, {
+        $set: {
+            type: "PICKUP",
+            "pickupDetails.scheduledDate": pickupDate,
+            "pickupDetails.pickupLocation": pickupLocation,
+        },
+    }, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+    ticket.logistics = pickup._id;
+    if (s === "CREATED") {
+        ticket.status = "PICKUP_SCHEDULED";
+        ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
+    }
+    await ticket.save();
+    res.status(201).json({
+        success: true,
+        data: {
+            pickupDate: pickup.pickupDetails?.scheduledDate || null,
+            pickupLocation: String(pickup.pickupDetails?.pickupLocation || ""),
+            documents: Array.isArray(pickup?.documents) ? pickup?.documents : [],
+        },
+    });
+});
+// @desc    Upload pickup document (PDF/Image) for a ticket
+// @route   POST /api/tickets/:id/pickup-documents
+exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (!["CUSTOMER", "ADMIN", "SALES"].includes(roleName)) {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    const file = req.file;
+    if (!file || !file.filename) {
+        return res.status(400).json({ success: false, message: "Missing file upload" });
+    }
+    const urlPath = `/uploads/pickup/${file.filename}`;
+    const pickup = await Logistics_model_1.default.findOneAndUpdate({ ticket: ticket._id, type: "PICKUP" }, {
+        $setOnInsert: {
+            ticket: ticket._id,
+            type: "PICKUP",
+            status: "SCHEDULED",
+        },
+        $addToSet: { documents: urlPath },
+    }, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+    ticket.logistics = pickup._id;
+    await ticket.save();
+    res.status(201).json({
+        success: true,
+        data: {
+            url: urlPath,
+            documents: Array.isArray(pickup?.documents) ? pickup.documents : [],
+        },
+    });
 });
 // @desc    Get (or create) jobcard for a ticket
 // @route   GET /api/tickets/:id/jobcard

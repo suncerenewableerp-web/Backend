@@ -40,7 +40,9 @@ const seed = async () => {
                 isSystem: true,
                 permissions: {
                     dashboard: { view: true },
-                    tickets: { view: true, create: true },
+                    tickets: { view: true, create: true, edit: true },
+                    logistics: { view: true, create: true, edit: true },
+                    sla: { view: true, edit: true },
                     reports: { view: true }
                 }
             },

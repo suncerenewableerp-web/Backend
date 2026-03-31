@@ -22,10 +22,10 @@ router.use(verifyToken);
 router.get('/', authorize('tickets', 'view'), asyncHandler(getTickets));
 router.post('/', authorize('tickets', 'create'), asyncHandler(createTicket));
 router.get('/:id/pickup-details', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(getTicketPickupDetails));
-router.post('/:id/pickup-details', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(upsertTicketPickupDetails));
+router.post('/:id/pickup-details', authorize('tickets', 'edit'), validate([validateTicketId]), asyncHandler(upsertTicketPickupDetails));
 router.post(
   "/:id/pickup-documents",
-  authorize("tickets", "view"),
+  authorize("tickets", "edit"),
   validate([validateTicketId]),
   pickupDocumentUpload.single("file"),
   asyncHandler(uploadTicketPickupDocument),

@@ -321,7 +321,7 @@ exports.getTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req
 // @route   POST /api/tickets/:id/pickup-details
 exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").toUpperCase();
-    if (roleName !== "CUSTOMER") {
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
     const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
@@ -371,7 +371,7 @@ exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (
 // @route   POST /api/tickets/:id/pickup-documents
 exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").toUpperCase();
-    if (!["CUSTOMER", "ADMIN", "SALES"].includes(roleName)) {
+    if (!["ADMIN", "SALES"].includes(roleName)) {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
     const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });

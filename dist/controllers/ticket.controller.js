@@ -94,6 +94,23 @@ function ticketScopeQuery(user) {
     }
     return {};
 }
+const STATUS_FLOW = [
+    'CREATED',
+    'PICKUP_SCHEDULED',
+    'IN_TRANSIT',
+    'UNDER_REPAIRED',
+    'DISPATCHED',
+    'CLOSED',
+];
+function normalizeFlowStatus(raw) {
+    const s = String(raw || 'CREATED').toUpperCase();
+    if (STATUS_FLOW.includes(s))
+        return s;
+    // Legacy backend statuses collapse into "UNDER_REPAIRED"
+    if (['RECEIVED', 'DIAGNOSIS', 'REPAIR', 'TESTING'].includes(s))
+        return 'UNDER_REPAIRED';
+    return 'CREATED';
+}
 // @desc    Create ticket
 // @route   POST /api/tickets
 exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
@@ -175,6 +192,24 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         return res.status(403).json({ success: false, message: 'Access denied.' });
     }
     const prevStatus = ticket.status;
+    const prevFlow = normalizeFlowStatus(prevStatus);
+    if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+        const nextFlow = normalizeFlowStatus(body.status);
+        const prevIdx = STATUS_FLOW.indexOf(prevFlow);
+        const nextIdx = STATUS_FLOW.indexOf(nextFlow);
+        if (prevFlow === 'CLOSED' && nextFlow !== 'CLOSED') {
+            return res.status(400).json({ success: false, message: 'Closed tickets cannot be reopened.' });
+        }
+        if (nextIdx < prevIdx) {
+            return res.status(400).json({ success: false, message: 'Status cannot move backwards.' });
+        }
+        if (nextIdx > prevIdx + 1) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please follow the workflow step-by-step. Skipping steps is not allowed.',
+            });
+        }
+    }
     if (isTicketAdmin) {
         if (Object.prototype.hasOwnProperty.call(body, 'status'))
             ticket.set('status', body.status);

@@ -8,6 +8,7 @@ const serviceJobSchema = new mongoose_1.default.Schema({
     sn: Number,
     jobName: String,
     specification: String,
+    componentsUsed: { type: [String], default: [] }, // multiple spares/components
     qty: Number,
     reason: String,
     date: Date,
@@ -22,6 +23,7 @@ const finalTestingActivitySchema = new mongoose_1.default.Schema({
 const jobCardSchema = new mongoose_1.default.Schema({
     ticket: { type: mongoose_1.default.Schema.ObjectId, ref: 'Ticket', required: true },
     diagnosis: String,
+    repairActionsByName: String, // e.g. QA team / sub engineer name
     spareParts: [{
             partName: String,
             partNo: String,

@@ -7,9 +7,12 @@ exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPic
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
+const Role_model_1 = __importDefault(require("../models/Role.model"));
+const User_model_1 = __importDefault(require("../models/User.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
 const cloudinary_1 = require("../config/cloudinary");
+const email_1 = require("../utils/email");
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
     { sr: 1, activity: 'Continuity test of AC side', result: '' },
     { sr: 2, activity: 'Continuity test of DC side', result: '' },
@@ -41,7 +44,15 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     // Role-scoped visibility
     const roleName = String(req.user?.role?.name || "").toUpperCase();
     if (roleName === 'ENGINEER') {
-        query.assignedTo = req.user._id;
+        // Engineers should always see their assigned tickets, and also the shared pool of
+        // tickets that have reached UNDER_REPAIRED (work starts from there).
+        const visibilityOr = [{ assignedTo: req.user._id }, { status: "UNDER_REPAIRED" }];
+        const existingSearchOr = query.$or;
+        delete query.$or;
+        query.$and = [
+            { $or: visibilityOr },
+            ...(existingSearchOr ? [{ $or: existingSearchOr }] : []),
+        ];
     }
     if (roleName === 'CUSTOMER') {
         // Only show tickets raised by this customer.
@@ -83,9 +94,9 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     });
 });
 function ticketScopeQuery(user) {
-    const roleName = user?.role?.name;
+    const roleName = String(user?.role?.name || "").toUpperCase();
     if (roleName === 'ENGINEER') {
-        return { assignedTo: user._id };
+        return { $or: [{ assignedTo: user._id }, { status: "UNDER_REPAIRED" }] };
     }
     if (roleName === 'CUSTOMER') {
         const legacyMatch = user?.phone
@@ -467,6 +478,7 @@ function pickJobCardUpdate(input) {
         'finalCheckedByDate',
         // Keep legacy fields editable if already used
         'diagnosis',
+        'repairActionsByName',
         'repairNotes',
         'testResults',
         'warrantyGiven',
@@ -493,6 +505,7 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
         jobcard = await JobCard_model_1.default.findById(ticket.jobCard);
     }
     const patch = pickJobCardUpdate(req.body);
+    const created = !jobcard;
     if (!jobcard) {
         jobcard = await JobCard_model_1.default.create({
             ticket: ticket._id,
@@ -502,14 +515,49 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
         });
         ticket.jobCard = jobcard._id;
         await ticket.save();
-        return res.status(201).json({ success: true, data: jobcard });
     }
-    jobcard.set(patch);
-    // Ensure defaults are present if client sends empty list unintentionally
-    if (!jobcard.finalTestingActivities?.length) {
-        jobcard.finalTestingActivities = DEFAULT_FINAL_TESTING_ACTIVITIES;
+    else {
+        jobcard.set(patch);
+        // Ensure defaults are present if client sends empty list unintentionally
+        if (!jobcard.finalTestingActivities?.length) {
+            jobcard.finalTestingActivities = DEFAULT_FINAL_TESTING_ACTIVITIES;
+        }
+        await jobcard.save();
     }
-    await jobcard.save();
-    res.json({ success: true, data: jobcard });
+    // Engineer flow: if marked NOT_REPAIRABLE, close the ticket and notify sales/admin.
+    const jobStatus = String(jobcard.currentStatus || "").toUpperCase().trim();
+    if (jobStatus === "NOT_REPAIRABLE") {
+        const ticketStatus = String(ticket.status || "").toUpperCase().trim();
+        if (ticketStatus !== "CLOSED") {
+            ticket.status = "CLOSED";
+            ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
+            await ticket.save();
+        }
+        try {
+            const roles = await Role_model_1.default.find({ name: { $in: ["SALES", "ADMIN"] } }).select("_id name");
+            const roleIds = roles.map((r) => r._id).filter(Boolean);
+            const rows = await User_model_1.default.find({ role: { $in: roleIds }, isActive: true })
+                .select("email name")
+                .lean();
+            const emails = Array.from(new Set((rows || [])
+                .map((u) => String(u?.email || "").trim().toLowerCase())
+                .filter(Boolean)));
+            const ticketId = String(ticket.ticketId || ticket._id || "");
+            const who = String(req.user?.name || req.user?._id || "");
+            const diagnosis = String(jobcard.diagnosis || "").trim();
+            const subject = `Ticket ${ticketId} marked NOT REPAIRABLE`;
+            const text = `Ticket ${ticketId} was marked NOT REPAIRABLE by ${who}.\n\n` +
+                (diagnosis ? `Diagnosis:\n${diagnosis}\n\n` : "") +
+                `Please review and take next action in ERP.`;
+            await Promise.all(emails.map((to) => (0, email_1.sendEmail)({ to, subject, text }).catch((e) => {
+                console.warn("📧 Failed to notify:", to, e?.message || e);
+                return { sent: false };
+            })));
+        }
+        catch (e) {
+            console.warn("📧 Sales notification failed:", e?.message || e);
+        }
+    }
+    res.status(created ? 201 : 200).json({ success: true, data: jobcard });
 });
 // named exports above

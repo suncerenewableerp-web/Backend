@@ -547,6 +547,9 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
   }
 
   const patch = pickJobCardUpdate(req.body);
+  const requestedFinal = String(req.body?.engineerFinalStatus || "").toUpperCase().trim();
+  const canSetFinal = requestedFinal === "REPAIRABLE" || requestedFinal === "NOT_REPAIRABLE";
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
 
   const created = !jobcard;
   if (!jobcard) {
@@ -569,49 +572,57 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
     await jobcard.save();
   }
 
-  // Engineer flow: if marked NOT_REPAIRABLE, close the ticket and notify sales/admin.
-  const jobStatus = String(jobcard.currentStatus || "").toUpperCase().trim();
-  if (jobStatus === "NOT_REPAIRABLE") {
-    const ticketStatus = String(ticket.status || "").toUpperCase().trim();
-    if (ticketStatus !== "CLOSED") {
-      ticket.status = "CLOSED";
-      ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
-      await ticket.save();
+  // Engineer final decision: engineer has the final authority (sales does not approve).
+  // We only allow engineers (and admins) to set the final status.
+  if (canSetFinal) {
+    if (roleName !== "ENGINEER" && roleName !== "ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied: Only engineers can finalize job cards.",
+      });
     }
+    (jobcard as any).engineerFinalStatus = requestedFinal;
+    (jobcard as any).engineerFinalizedAt = new Date();
+    (jobcard as any).engineerFinalizedBy = req.user?._id;
+    await jobcard.save();
 
-    try {
-      const roles = await Role.find({ name: { $in: ["SALES", "ADMIN"] } }).select("_id name");
-      const roleIds = roles.map((r: any) => r._id).filter(Boolean);
-      const rows = await User.find({ role: { $in: roleIds }, isActive: true })
-        .select("email name")
-        .lean();
-      const emails = Array.from(
-        new Set(
-          (rows || [])
-            .map((u: any) => String(u?.email || "").trim().toLowerCase())
-            .filter(Boolean),
-        ),
-      );
+    // Notify sales/admin when engineer scraps the unit.
+    if (requestedFinal === "NOT_REPAIRABLE") {
+      try {
+        const roles = await Role.find({ name: { $in: ["SALES", "ADMIN"] } }).select("_id name");
+        const roleIds = roles.map((r: any) => r._id).filter(Boolean);
+        const rows = await User.find({ role: { $in: roleIds }, isActive: true })
+          .select("email name")
+          .lean();
+        const emails = Array.from(
+          new Set(
+            (rows || [])
+              .map((u: any) => String(u?.email || "").trim().toLowerCase())
+              .filter(Boolean),
+          ),
+        );
 
-      const ticketId = String((ticket as any).ticketId || ticket._id || "");
-      const who = String(req.user?.name || req.user?._id || "");
-      const diagnosis = String(jobcard.diagnosis || "").trim();
-      const subject = `Ticket ${ticketId} marked NOT REPAIRABLE`;
-      const text =
-        `Ticket ${ticketId} was marked NOT REPAIRABLE by ${who}.\n\n` +
-        (diagnosis ? `Diagnosis:\n${diagnosis}\n\n` : "") +
-        `Please review and take next action in ERP.`;
+        const ticketId = String((ticket as any).ticketId || ticket._id || "");
+        const who = String(req.user?.name || req.user?._id || "");
+        const diagnosis = String(jobcard.diagnosis || "").trim();
+        const subject = `Ticket ${ticketId} SCRAP / NOT REPAIRABLE`;
+        const text =
+          `Engineer finalized ticket ${ticketId} as NOT REPAIRABLE (SCRAP).\n\n` +
+          `By: ${who}\n\n` +
+          (diagnosis ? `Diagnosis:\n${diagnosis}\n\n` : "") +
+          `Please proceed with next action (dispatch/closure) in ERP.`;
 
-      await Promise.all(
-        emails.map((to) =>
-          sendEmail({ to, subject, text }).catch((e) => {
-            console.warn("📧 Failed to notify:", to, e?.message || e);
-            return { sent: false };
-          }),
-        ),
-      );
-    } catch (e: any) {
-      console.warn("📧 Sales notification failed:", e?.message || e);
+        await Promise.all(
+          emails.map((to) =>
+            sendEmail({ to, subject, text }).catch((e) => {
+              console.warn("📧 Failed to notify:", to, e?.message || e);
+              return { sent: false };
+            }),
+          ),
+        );
+      } catch (e: any) {
+        console.warn("📧 Sales notification failed:", e?.message || e);
+      }
     }
   }
 

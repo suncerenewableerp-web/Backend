@@ -59,6 +59,10 @@ const jobCardSchema = new mongoose_1.default.Schema({
     remarks: String,
     checkedByName: String,
     checkedByDate: Date,
+    // Engineer final decision (final authority)
+    engineerFinalStatus: String, // REPAIRABLE | NOT_REPAIRABLE
+    engineerFinalizedAt: Date,
+    engineerFinalizedBy: { type: mongoose_1.default.Schema.ObjectId, ref: 'User' },
     serviceJobs: { type: [serviceJobSchema], default: [] },
     finalTestingActivities: { type: [finalTestingActivitySchema], default: [] },
     finalStatus: String,

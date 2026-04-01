@@ -10,7 +10,10 @@ const error_middleware_1 = require("../middleware/error.middleware");
 // @route   GET /api/jobcards
 exports.getJobCards = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const jobcards = await JobCard_model_1.default.find({})
-        .populate('ticket')
+        .populate({
+        path: "ticket",
+        populate: [{ path: "assignedTo", select: "name" }],
+    })
         .populate('stages.assignedTo', 'name')
         .populate('testedBy', 'name')
         .sort('-createdAt');

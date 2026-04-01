@@ -57,6 +57,7 @@ async function seed() {
             permissions: withOverrides({
                 dashboard: { view: true },
                 tickets: { view: true, create: true, edit: true },
+                jobcard: { view: true },
                 logistics: { view: true, create: true, edit: true },
                 sla: { view: true, edit: true },
                 reports: { view: true },

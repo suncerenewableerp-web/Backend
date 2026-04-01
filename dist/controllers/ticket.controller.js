@@ -12,6 +12,7 @@ const User_model_1 = __importDefault(require("../models/User.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
 const cloudinary_1 = require("../config/cloudinary");
+const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
 const email_1 = require("../utils/email");
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
     { sr: 1, activity: 'Continuity test of AC side', result: '' },
@@ -324,7 +325,7 @@ exports.getTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req
         data: {
             pickupDate: pickup?.pickupDetails?.scheduledDate || null,
             pickupLocation: String(pickup?.pickupDetails?.pickupLocation || ticket.customer?.address || ""),
-            documents: Array.isArray(pickup?.documents) ? pickup?.documents : [],
+            documents: (0, cloudinaryDownloadUrl_1.mapCloudinaryDocUrls)(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
         },
     });
 });
@@ -374,7 +375,7 @@ exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (
         data: {
             pickupDate: pickup.pickupDetails?.scheduledDate || null,
             pickupLocation: String(pickup.pickupDetails?.pickupLocation || ""),
-            documents: Array.isArray(pickup?.documents) ? pickup?.documents : [],
+            documents: (0, cloudinaryDownloadUrl_1.mapCloudinaryDocUrls)(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
         },
     });
 });
@@ -405,6 +406,7 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
             folder,
             public_id: publicId,
             resource_type: "auto", // supports pdf/images
+            access_mode: "public",
         }, (err, result) => {
             if (err)
                 return reject(err);
@@ -428,8 +430,8 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
     res.status(201).json({
         success: true,
         data: {
-            url: urlPath,
-            documents: Array.isArray(pickup?.documents) ? pickup.documents : [],
+            url: (0, cloudinaryDownloadUrl_1.toCloudinaryPrivateDownloadUrl)(urlPath, { expiresInSeconds: 24 * 60 * 60 }),
+            documents: (0, cloudinaryDownloadUrl_1.mapCloudinaryDocUrls)(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
         },
     });
 });

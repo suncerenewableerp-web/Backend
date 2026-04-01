@@ -1,6 +1,7 @@
 import Logistics from "../models/Logistics.model";
 import Ticket from "../models/Ticket.model";
 import { asyncHandler } from "../middleware/error.middleware";
+import { mapCloudinaryDocUrls } from "../utils/cloudinaryDownloadUrl";
 
 // @desc    Get all logistics
 // @route   GET /api/logistics
@@ -107,7 +108,15 @@ export const getLogisticsByTicket = asyncHandler(async (req: any, res: any) => {
     .sort("-updatedAt")
     .limit(50);
 
-  res.json({ success: true, data: logistics });
+  const data = logistics.map((row: any) => {
+    const obj = typeof row?.toObject === "function" ? row.toObject() : row;
+    return {
+      ...obj,
+      documents: mapCloudinaryDocUrls(obj?.documents, { expiresInSeconds: 24 * 60 * 60 }),
+    };
+  });
+
+  res.json({ success: true, data });
 });
 
 // @desc    Schedule dispatch for a ticket (creates/updates delivery logistics)

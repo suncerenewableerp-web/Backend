@@ -7,6 +7,7 @@ exports.scheduleDispatch = exports.getLogisticsByTicket = exports.schedulePickup
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
+const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
 // @desc    Get all logistics
 // @route   GET /api/logistics
 exports.getLogistics = (0, error_middleware_1.asyncHandler)(async (req, res) => {
@@ -91,7 +92,14 @@ exports.getLogisticsByTicket = (0, error_middleware_1.asyncHandler)(async (req, 
     const logistics = await Logistics_model_1.default.find({ ticket: ticket._id })
         .sort("-updatedAt")
         .limit(50);
-    res.json({ success: true, data: logistics });
+    const data = logistics.map((row) => {
+        const obj = typeof row?.toObject === "function" ? row.toObject() : row;
+        return {
+            ...obj,
+            documents: (0, cloudinaryDownloadUrl_1.mapCloudinaryDocUrls)(obj?.documents, { expiresInSeconds: 24 * 60 * 60 }),
+        };
+    });
+    res.json({ success: true, data });
 });
 // @desc    Schedule dispatch for a ticket (creates/updates delivery logistics)
 // @route   POST /api/logistics/schedule-dispatch

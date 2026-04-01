@@ -6,6 +6,7 @@ import User from "../models/User.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
 import { cloudinary, ensureCloudinaryConfigured } from "../config/cloudinary";
+import { mapCloudinaryDocUrls, toCloudinaryPrivateDownloadUrl } from "../utils/cloudinaryDownloadUrl";
 import { sendEmail } from "../utils/email";
 
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
@@ -332,7 +333,7 @@ export const getTicketPickupDetails = asyncHandler(async (req: any, res: any) =>
     data: {
       pickupDate: pickup?.pickupDetails?.scheduledDate || null,
       pickupLocation: String(pickup?.pickupDetails?.pickupLocation || ticket.customer?.address || ""),
-      documents: Array.isArray(pickup?.documents) ? pickup?.documents : [],
+      documents: mapCloudinaryDocUrls(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
     },
   });
 });
@@ -395,7 +396,7 @@ export const upsertTicketPickupDetails = asyncHandler(async (req: any, res: any)
     data: {
       pickupDate: pickup.pickupDetails?.scheduledDate || null,
       pickupLocation: String(pickup.pickupDetails?.pickupLocation || ""),
-      documents: Array.isArray(pickup?.documents) ? pickup?.documents : [],
+      documents: mapCloudinaryDocUrls(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
     },
   });
 });
@@ -431,6 +432,7 @@ export const uploadTicketPickupDocument = asyncHandler(async (req: any, res: any
         folder,
         public_id: publicId,
         resource_type: "auto", // supports pdf/images
+        access_mode: "public",
       },
       (err, result) => {
         if (err) return reject(err);
@@ -462,8 +464,8 @@ export const uploadTicketPickupDocument = asyncHandler(async (req: any, res: any
   res.status(201).json({
     success: true,
     data: {
-      url: urlPath,
-      documents: Array.isArray(pickup?.documents) ? pickup.documents : [],
+      url: toCloudinaryPrivateDownloadUrl(urlPath, { expiresInSeconds: 24 * 60 * 60 }),
+      documents: mapCloudinaryDocUrls(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
     },
   });
 });

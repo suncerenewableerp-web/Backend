@@ -47,6 +47,9 @@ const authorize = (module, action) => {
                 return next();
             if (module === "logistics" && action !== "delete")
                 return next();
+            // Business rule: SALES must be able to view engineer jobcard details for a ticket.
+            if (module === "jobcard" && action === "view")
+                return next();
         }
         if (!role.permissions[module]?.[action]) {
             return res.status(403).json({

@@ -5,7 +5,10 @@ import { asyncHandler } from "../middleware/error.middleware";
 // @route   GET /api/jobcards
 export const getJobCards = asyncHandler(async (req: any, res: any) => {
   const jobcards = await JobCard.find({})
-    .populate('ticket')
+    .populate({
+      path: "ticket",
+      populate: [{ path: "assignedTo", select: "name" }],
+    })
     .populate('stages.assignedTo', 'name')
     .populate('testedBy', 'name')
     .sort('-createdAt');
@@ -38,4 +41,3 @@ export const addPart = asyncHandler(async (req: any, res: any) => {
   );
   res.json({ success: true, data: jobcard });
 });
-

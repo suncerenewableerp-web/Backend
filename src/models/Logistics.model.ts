@@ -36,6 +36,10 @@ const logisticsSchema = new mongoose.Schema({
     insurance: Number,
     total: Number
   },
+  billing: {
+    invoiceGenerated: { type: Boolean, default: false },
+    paymentDone: { type: Boolean, default: false },
+  },
   issues: String,
   documents: [String] // PDFs, photos URLs
 }, {

@@ -3,14 +3,72 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateSlaSettings = exports.getSlaSettings = void 0;
+exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
 const SlaSettings_model_1 = __importDefault(require("../models/SlaSettings.model"));
+const InverterBrand_model_1 = __importDefault(require("../models/InverterBrand.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
+const DEFAULT_INVERTER_BRANDS = [
+    "ABB",
+    "ADVANCED ENERGY",
+    "Astronergy",
+    "CHINT",
+    "DELTA",
+    "EAPRO",
+    "EUROLEX",
+    "FRONIUS",
+    "GOODWE",
+    "GROWATT",
+    "HAVELLS",
+    "HUAWEI",
+    "INGETEAM",
+    "JAKSON",
+    "JFY-TECH",
+    "K SOLARE",
+    "KACO",
+    "KSATAR",
+    "KSOLARE",
+    "LUMINOUS",
+    "microlyte",
+    "MUSCLE",
+    "OFFGRID",
+    "Oorja on Move(ZTT)",
+    "POWER ONE",
+    "REFUsol",
+    "REPLUS",
+    "SAJ",
+    "SCHNEIDER ELECTRIC",
+    "SMA",
+    "SOFAR",
+    "SOLA X POWER",
+    "SOLAR EDGE",
+    "SOLEPLANET",
+    "SOLEX",
+    "SOLIS",
+    "Statcon",
+    "SUCAM",
+    "SUNGROW",
+    "TBEA",
+    "THEA",
+    "VIKRAM SOLAR",
+    "WAAREE",
+    "Zeversolar",
+];
 function toPositiveInt(v) {
     const n = typeof v === 'number' ? v : Number.parseInt(String(v || ''), 10);
     if (!Number.isFinite(n) || n <= 0)
         return null;
     return Math.trunc(n);
+}
+function normalizeBrandName(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return null;
+    // Collapse whitespace and normalize.
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (!name)
+        return null;
+    const key = name.toLowerCase();
+    return { name, key };
 }
 // @desc    Get SLA settings
 // @route   GET /api/settings/sla
@@ -52,4 +110,38 @@ exports.updateSlaSettings = (0, error_middleware_1.asyncHandler)(async (req, res
             normalHours: doc.normalHours,
         },
     });
+});
+// @desc    List inverter brands (for dropdown)
+// @route   GET /api/settings/inverter-brands
+exports.listInverterBrands = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const existingCount = await InverterBrand_model_1.default.estimatedDocumentCount().catch(() => 0);
+    if (!existingCount) {
+        const docs = DEFAULT_INVERTER_BRANDS.map((name) => {
+            const parsed = normalizeBrandName(name);
+            return parsed ? { name: parsed.name, key: parsed.key } : null;
+        }).filter(Boolean);
+        try {
+            // ordered:false => ignore duplicates if multiple servers seed concurrently
+            await InverterBrand_model_1.default.insertMany(docs, { ordered: false });
+        }
+        catch {
+            // ignore
+        }
+    }
+    const rows = await InverterBrand_model_1.default.find({}).select("name").sort({ name: 1 }).lean();
+    const brands = (rows || []).map((r) => String(r?.name || "").trim()).filter(Boolean);
+    res.json({ success: true, data: brands });
+});
+// @desc    Add inverter brand to dropdown list
+// @route   POST /api/settings/inverter-brands
+exports.addInverterBrand = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const parsed = normalizeBrandName(req.body?.name);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Brand name is required" });
+    }
+    if (parsed.name.length > 80) {
+        return res.status(400).json({ success: false, message: "Brand name too long" });
+    }
+    const doc = await InverterBrand_model_1.default.findOneAndUpdate({ key: parsed.key }, { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }).lean();
+    res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
 });

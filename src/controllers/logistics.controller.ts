@@ -39,6 +39,21 @@ function toDateOrNull(v) {
   return d;
 }
 
+function hasOwn(obj: any, key: string) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function toBoolOrNull(v: any): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1 ? true : v === 0 ? false : null;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "yes" || s === "y") return true;
+    if (s === "false" || s === "0" || s === "no" || s === "n") return false;
+  }
+  return null;
+}
+
 // @desc    Schedule pickup for a ticket (creates/updates pickup logistics)
 // @route   POST /api/logistics/schedule-pickup
 export const schedulePickup = asyncHandler(async (req: any, res: any) => {
@@ -136,6 +151,10 @@ export const scheduleDispatch = asyncHandler(async (req: any, res: any) => {
   const courierName = String(req.body?.courierName || "").trim();
   const lrNumber = String(req.body?.lrNumber || "").trim();
   const dispatchLocation = String(req.body?.dispatchLocation || "").trim();
+  const invoiceGenerated = hasOwn(req.body, "invoiceGenerated")
+    ? toBoolOrNull(req.body?.invoiceGenerated)
+    : null;
+  const paymentDone = hasOwn(req.body, "paymentDone") ? toBoolOrNull(req.body?.paymentDone) : null;
 
   if (!dispatchDate) {
     return res.status(400).json({ success: false, message: "dispatchDate is required" });
@@ -151,16 +170,22 @@ export const scheduleDispatch = asyncHandler(async (req: any, res: any) => {
     });
   }
 
+  const setPatch: Record<string, any> = {
+    type: "DELIVERY",
+    status: "IN_TRANSIT",
+    "pickupDetails.scheduledDate": dispatchDate,
+    "pickupDetails.pickupLocation": dispatchLocation,
+    "courierDetails.courierName": courierName,
+    "courierDetails.lrNumber": lrNumber,
+  };
+  if (invoiceGenerated !== null) setPatch["billing.invoiceGenerated"] = invoiceGenerated;
+  if (paymentDone !== null) setPatch["billing.paymentDone"] = paymentDone;
+
   const logistics = await Logistics.findOneAndUpdate(
     { ticket: ticket._id, type: "DELIVERY" },
     {
       $set: {
-        type: "DELIVERY",
-        status: "IN_TRANSIT",
-        "pickupDetails.scheduledDate": dispatchDate,
-        "pickupDetails.pickupLocation": dispatchLocation,
-        "courierDetails.courierName": courierName,
-        "courierDetails.lrNumber": lrNumber,
+        ...setPatch,
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true },

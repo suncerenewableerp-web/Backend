@@ -47,7 +47,17 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     if (roleName === 'ENGINEER') {
         // Engineers should always see their assigned tickets, and also the shared pool of
         // tickets that have reached UNDER_REPAIRED (work starts from there).
+        const finalizedRows = await JobCard_model_1.default.find({ engineerFinalizedBy: req.user._id })
+            .select("ticket")
+            .lean();
+        const finalizedTicketIds = Array.from(new Set((finalizedRows || []).map((r) => String(r?.ticket || "")).filter(Boolean)));
+        // Backfill: attach engineer to their finalized tickets so CLOSED tickets show in their list.
+        if (finalizedTicketIds.length) {
+            await Ticket_model_1.default.updateMany({ _id: { $in: finalizedTicketIds }, assignedTo: { $ne: req.user._id } }, { $addToSet: { assignedTo: req.user._id } }).catch(() => { });
+        }
         const visibilityOr = [{ assignedTo: req.user._id }, { status: "UNDER_REPAIRED" }];
+        if (finalizedTicketIds.length)
+            visibilityOr.push({ _id: { $in: finalizedTicketIds } });
         const existingSearchOr = query.$or;
         delete query.$or;
         query.$and = [
@@ -119,6 +129,7 @@ const STATUS_FLOW = [
     'PICKUP_SCHEDULED',
     'IN_TRANSIT',
     'UNDER_REPAIRED',
+    'UNDER_DISPATCH',
     'DISPATCHED',
     'CLOSED',
 ];
@@ -179,7 +190,8 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
 // @route   GET /api/tickets/:id
 exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").toUpperCase();
-    const ticketQuery = Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+    const scopedQuery = { _id: req.params.id, ...ticketScopeQuery(req.user) };
+    const ticketQuery = Ticket_model_1.default.findOne(scopedQuery)
         .populate('createdBy', 'email name phone')
         .populate('assignedTo', 'name')
         .populate('jobCard')
@@ -189,7 +201,24 @@ exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         // Customers must never see warranty validity/dates.
         ticketQuery.select("-inverter.warrantyEnd");
     }
-    const ticket = await ticketQuery;
+    let ticket = await ticketQuery;
+    // Fallback for legacy rows: allow engineers to view tickets they finalized even if `assignedTo`
+    // was not set at that time.
+    if (!ticket && roleName === "ENGINEER") {
+        const raw = await Ticket_model_1.default.findById(req.params.id).select("jobCard").lean();
+        const jobCardId = raw?.jobCard ? String(raw.jobCard) : "";
+        if (jobCardId) {
+            const jc = await JobCard_model_1.default.findById(jobCardId).select("engineerFinalizedBy").lean();
+            if (String(jc?.engineerFinalizedBy || "") === String(req.user?._id || "")) {
+                ticket = await Ticket_model_1.default.findById(req.params.id)
+                    .populate('createdBy', 'email name phone')
+                    .populate('assignedTo', 'name')
+                    .populate('jobCard')
+                    .populate('logistics')
+                    .populate('statusHistory.changedBy', 'name');
+            }
+        }
+    }
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
     res.json({ success: true, data: ticket });
@@ -205,12 +234,16 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const topKeys = Object.keys(body);
     const roleNorm = String(roleName || "").toUpperCase();
+    if (roleNorm === "ENGINEER" && String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
+    }
     const isTicketAdmin = roleNorm === "ADMIN" || roleNorm === "SALES";
     const ALLOWED_STATUSES = new Set([
         'CREATED',
         'PICKUP_SCHEDULED',
         'IN_TRANSIT',
         'UNDER_REPAIRED',
+        'UNDER_DISPATCH',
         'DISPATCHED',
         'CLOSED',
     ]);
@@ -443,7 +476,15 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
 // @desc    Get (or create) jobcard for a ticket
 // @route   GET /api/tickets/:id/jobcard
 exports.getTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).populate('jobCard');
+    let ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).populate('jobCard');
+    if (!ticket && String(req.user?.role?.name || "").toUpperCase() === "ENGINEER") {
+        // Legacy fallback: allow viewing job card for tickets engineer finalized.
+        const raw = await Ticket_model_1.default.findById(req.params.id).populate("jobCard");
+        const finalizedBy = raw?.jobCard?.engineerFinalizedBy ? String(raw.jobCard.engineerFinalizedBy) : "";
+        if (finalizedBy && finalizedBy === String(req.user?._id || "")) {
+            ticket = raw;
+        }
+    }
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
     if (ticket.jobCard) {
@@ -507,6 +548,10 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
     const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
+    if (String(req.user?.role?.name || "").toUpperCase() === "ENGINEER" &&
+        String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
+    }
     let jobcard = null;
     if (ticket.jobCard) {
         jobcard = await JobCard_model_1.default.findById(ticket.jobCard);
@@ -574,6 +619,17 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
             catch (e) {
                 console.warn("📧 Sales notification failed:", e?.message || e);
             }
+        }
+    }
+    // If an engineer worked on this job card, keep them attached to the ticket so they
+    // can see it later in their list even after sales/admin closes it.
+    if (roleName === "ENGINEER" && req.user?._id) {
+        const existing = Array.isArray(ticket.assignedTo) ? ticket.assignedTo : [];
+        const uid = String(req.user._id);
+        const has = existing.some((x) => String(x) === uid);
+        if (!has) {
+            ticket.assignedTo = [...existing, req.user._id];
+            await ticket.save();
         }
     }
     res.status(created ? 201 : 200).json({ success: true, data: jobcard });

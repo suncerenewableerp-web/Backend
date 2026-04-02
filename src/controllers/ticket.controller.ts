@@ -45,7 +45,23 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
   if (roleName === 'ENGINEER') {
     // Engineers should always see their assigned tickets, and also the shared pool of
     // tickets that have reached UNDER_REPAIRED (work starts from there).
-    const visibilityOr = [{ assignedTo: req.user._id }, { status: "UNDER_REPAIRED" }];
+    const finalizedRows = await JobCard.find({ engineerFinalizedBy: req.user._id })
+      .select("ticket")
+      .lean();
+    const finalizedTicketIds = Array.from(
+      new Set((finalizedRows || []).map((r: any) => String(r?.ticket || "")).filter(Boolean)),
+    );
+
+    // Backfill: attach engineer to their finalized tickets so CLOSED tickets show in their list.
+    if (finalizedTicketIds.length) {
+      await Ticket.updateMany(
+        { _id: { $in: finalizedTicketIds }, assignedTo: { $ne: req.user._id } },
+        { $addToSet: { assignedTo: req.user._id } },
+      ).catch(() => {});
+    }
+
+    const visibilityOr: any[] = [{ assignedTo: req.user._id }, { status: "UNDER_REPAIRED" }];
+    if (finalizedTicketIds.length) visibilityOr.push({ _id: { $in: finalizedTicketIds } });
     const existingSearchOr = query.$or;
     delete query.$or;
     query.$and = [
@@ -126,6 +142,7 @@ const STATUS_FLOW = [
   'PICKUP_SCHEDULED',
   'IN_TRANSIT',
   'UNDER_REPAIRED',
+  'UNDER_DISPATCH',
   'DISPATCHED',
   'CLOSED',
 ];
@@ -190,7 +207,8 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
 // @route   GET /api/tickets/:id
 export const getTicket = asyncHandler(async (req: any, res: any) => {
   const roleName = String(req.user?.role?.name || "").toUpperCase();
-  const ticketQuery = Ticket.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+  const scopedQuery = { _id: req.params.id, ...ticketScopeQuery(req.user) };
+  const ticketQuery = Ticket.findOne(scopedQuery)
     .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
     .populate('jobCard')
@@ -202,8 +220,26 @@ export const getTicket = asyncHandler(async (req: any, res: any) => {
     ticketQuery.select("-inverter.warrantyEnd");
   }
 
-  const ticket = await ticketQuery;
-    
+  let ticket = await ticketQuery;
+
+  // Fallback for legacy rows: allow engineers to view tickets they finalized even if `assignedTo`
+  // was not set at that time.
+  if (!ticket && roleName === "ENGINEER") {
+    const raw = await Ticket.findById(req.params.id).select("jobCard").lean();
+    const jobCardId = raw?.jobCard ? String(raw.jobCard) : "";
+    if (jobCardId) {
+      const jc = await JobCard.findById(jobCardId).select("engineerFinalizedBy").lean();
+      if (String(jc?.engineerFinalizedBy || "") === String(req.user?._id || "")) {
+        ticket = await Ticket.findById(req.params.id)
+          .populate('createdBy', 'email name phone')
+          .populate('assignedTo', 'name')
+          .populate('jobCard')
+          .populate('logistics')
+          .populate('statusHistory.changedBy', 'name');
+      }
+    }
+  }
+
   if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
   res.json({ success: true, data: ticket });
 });
@@ -219,12 +255,16 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const topKeys = Object.keys(body);
   const roleNorm = String(roleName || "").toUpperCase();
+  if (roleNorm === "ENGINEER" && String(ticket.status || "").toUpperCase() === "CLOSED") {
+    return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
+  }
   const isTicketAdmin = roleNorm === "ADMIN" || roleNorm === "SALES";
   const ALLOWED_STATUSES = new Set([
     'CREATED',
     'PICKUP_SCHEDULED',
     'IN_TRANSIT',
     'UNDER_REPAIRED',
+    'UNDER_DISPATCH',
     'DISPATCHED',
     'CLOSED',
   ]);
@@ -478,7 +518,15 @@ export const uploadTicketPickupDocument = asyncHandler(async (req: any, res: any
 // @desc    Get (or create) jobcard for a ticket
 // @route   GET /api/tickets/:id/jobcard
 export const getTicketJobCard = asyncHandler(async (req: any, res: any) => {
-  const ticket: any = await Ticket.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).populate('jobCard');
+  let ticket: any = await Ticket.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).populate('jobCard');
+  if (!ticket && String(req.user?.role?.name || "").toUpperCase() === "ENGINEER") {
+    // Legacy fallback: allow viewing job card for tickets engineer finalized.
+    const raw: any = await Ticket.findById(req.params.id).populate("jobCard");
+    const finalizedBy = raw?.jobCard?.engineerFinalizedBy ? String(raw.jobCard.engineerFinalizedBy) : "";
+    if (finalizedBy && finalizedBy === String(req.user?._id || "")) {
+      ticket = raw;
+    }
+  }
   if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
   if (ticket.jobCard) {
@@ -545,6 +593,12 @@ function pickJobCardUpdate(input) {
 export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
   const ticket = await Ticket.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
   if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found' });
+  if (
+    String(req.user?.role?.name || "").toUpperCase() === "ENGINEER" &&
+    String(ticket.status || "").toUpperCase() === "CLOSED"
+  ) {
+    return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
+  }
 
   let jobcard = null;
   if (ticket.jobCard) {
@@ -628,6 +682,18 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
       } catch (e: any) {
         console.warn("📧 Sales notification failed:", e?.message || e);
       }
+    }
+  }
+
+  // If an engineer worked on this job card, keep them attached to the ticket so they
+  // can see it later in their list even after sales/admin closes it.
+  if (roleName === "ENGINEER" && req.user?._id) {
+    const existing = Array.isArray((ticket as any).assignedTo) ? (ticket as any).assignedTo : [];
+    const uid = String(req.user._id);
+    const has = existing.some((x: any) => String(x) === uid);
+    if (!has) {
+      (ticket as any).assignedTo = [...existing, req.user._id];
+      await ticket.save();
     }
   }
 

@@ -49,6 +49,7 @@ const ticketSchema = new mongoose_1.default.Schema({
             'PICKUP_SCHEDULED',
             'IN_TRANSIT',
             'UNDER_REPAIRED',
+            'UNDER_DISPATCH',
             'DISPATCHED',
             'CLOSED',
             // Legacy statuses kept for backward compatibility with existing DB rows

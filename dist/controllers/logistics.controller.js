@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.scheduleDispatch = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
+exports.scheduleDispatch = exports.saveUnderDispatch = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
@@ -118,6 +118,72 @@ exports.getLogisticsByTicket = (0, error_middleware_1.asyncHandler)(async (req, 
     });
     res.json({ success: true, data });
 });
+// @desc    Under-dispatch review (invoice + payment flags) for a ticket
+// @route   POST /api/logistics/under-dispatch
+exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = req.user?.role?.name;
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticketId = String(req.body?.ticketId || "").trim();
+    if (!ticketId) {
+        return res.status(400).json({ success: false, message: "ticketId is required" });
+    }
+    const invoiceGenerated = hasOwn(req.body, "invoiceGenerated")
+        ? toBoolOrNull(req.body?.invoiceGenerated)
+        : null;
+    const paymentDone = hasOwn(req.body, "paymentDone") ? toBoolOrNull(req.body?.paymentDone) : null;
+    if (invoiceGenerated === null && paymentDone === null) {
+        return res.status(400).json({
+            success: false,
+            message: "At least one field is required: invoiceGenerated or paymentDone.",
+        });
+    }
+    const ticket = await Ticket_model_1.default.findById(ticketId);
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+    }
+    const allowed = ["UNDER_REPAIRED", "UNDER_DISPATCH", "DISPATCHED"];
+    if (!allowed.includes(String(ticket.status || "").toUpperCase())) {
+        return res.status(400).json({
+            success: false,
+            message: "Under-dispatch review is allowed only when the ticket is UNDER_REPAIRED, UNDER_DISPATCH or DISPATCHED.",
+        });
+    }
+    const setPatch = {};
+    if (invoiceGenerated !== null)
+        setPatch["billing.invoiceGenerated"] = invoiceGenerated;
+    if (paymentDone !== null)
+        setPatch["billing.paymentDone"] = paymentDone;
+    // Avoid Mongo "Updating the path 'type' would create a conflict at 'type'" errors
+    // that can happen with upsert + type filter across different mongoose/mongodb versions.
+    let logistics = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" });
+    if (!logistics) {
+        logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
+    }
+    logistics.billing = logistics.billing || {};
+    if (invoiceGenerated !== null)
+        logistics.billing.invoiceGenerated = invoiceGenerated;
+    if (paymentDone !== null)
+        logistics.billing.paymentDone = paymentDone;
+    await logistics.save();
+    await logistics.populate("ticket");
+    ticket.logistics = logistics._id;
+    if (String(ticket.status || "").toUpperCase() === "UNDER_REPAIRED") {
+        ticket.status = "UNDER_DISPATCH";
+        ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
+    }
+    await ticket.save();
+    res.status(201).json({
+        success: true,
+        data: {
+            invoiceGenerated: Boolean(logistics?.billing?.invoiceGenerated),
+            paymentDone: Boolean(logistics?.billing?.paymentDone),
+        },
+    });
+});
 // @desc    Schedule dispatch for a ticket (creates/updates delivery logistics)
 // @route   POST /api/logistics/schedule-dispatch
 exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) => {
@@ -133,43 +199,43 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
     const courierName = String(req.body?.courierName || "").trim();
     const lrNumber = String(req.body?.lrNumber || "").trim();
     const dispatchLocation = String(req.body?.dispatchLocation || "").trim();
-    const invoiceGenerated = hasOwn(req.body, "invoiceGenerated")
-        ? toBoolOrNull(req.body?.invoiceGenerated)
-        : null;
-    const paymentDone = hasOwn(req.body, "paymentDone") ? toBoolOrNull(req.body?.paymentDone) : null;
     if (!dispatchDate) {
         return res.status(400).json({ success: false, message: "dispatchDate is required" });
     }
     const ticket = await Ticket_model_1.default.findById(ticketId);
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
-    if (!["UNDER_REPAIRED", "DISPATCHED"].includes(String(ticket.status || ""))) {
+    if (!["UNDER_DISPATCH", "DISPATCHED"].includes(String(ticket.status || "").toUpperCase())) {
         return res.status(400).json({
             success: false,
-            message: "Dispatch is allowed only when the ticket is UNDER_REPAIRED or DISPATCHED.",
+            message: "Dispatch is allowed only when the ticket is UNDER_DISPATCH or DISPATCHED.",
         });
     }
     const setPatch = {
-        type: "DELIVERY",
         status: "IN_TRANSIT",
         "pickupDetails.scheduledDate": dispatchDate,
         "pickupDetails.pickupLocation": dispatchLocation,
         "courierDetails.courierName": courierName,
         "courierDetails.lrNumber": lrNumber,
     };
-    if (invoiceGenerated !== null)
-        setPatch["billing.invoiceGenerated"] = invoiceGenerated;
-    if (paymentDone !== null)
-        setPatch["billing.paymentDone"] = paymentDone;
-    const logistics = await Logistics_model_1.default.findOneAndUpdate({ ticket: ticket._id, type: "DELIVERY" }, {
-        $set: {
-            ...setPatch,
-        },
-    }, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }).populate("ticket");
+    // Avoid upsert update-path conflicts on `type` by using find/create + save.
+    let logistics = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" });
+    if (!logistics) {
+        logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
+    }
+    logistics.status = "IN_TRANSIT";
+    logistics.pickupDetails = logistics.pickupDetails || {};
+    logistics.pickupDetails.scheduledDate = dispatchDate;
+    logistics.pickupDetails.pickupLocation = dispatchLocation;
+    logistics.courierDetails = logistics.courierDetails || {};
+    logistics.courierDetails.courierName = courierName;
+    logistics.courierDetails.lrNumber = lrNumber;
+    await logistics.save();
+    await logistics.populate("ticket");
     // Link latest logistics to ticket (single reference in model)
     ticket.logistics = logistics._id;
-    // Move ticket in flow if dispatch happens after repair
-    if (ticket.status === "UNDER_REPAIRED") {
+    // Move ticket in flow after under-dispatch review
+    if (String(ticket.status || "").toUpperCase() === "UNDER_DISPATCH") {
         ticket.status = "DISPATCHED";
         ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
     }

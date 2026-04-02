@@ -16,7 +16,7 @@ export const errorHandler = (err: any, req: Request, res: Response, next: NextFu
   if (err?.name === "MulterError") {
     const msg =
       err?.code === "LIMIT_FILE_SIZE"
-        ? "File too large"
+        ? "File too large. Max 2MB."
         : err?.message || "Upload failed";
     return res.status(400).json({ success: false, message: msg });
   }

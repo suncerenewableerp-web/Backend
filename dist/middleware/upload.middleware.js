@@ -14,7 +14,7 @@ const allowedMimes = new Set([
 ]);
 exports.pickupDocumentUpload = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
-    limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+    limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
     fileFilter: (_req, file, cb) => {
         if (!allowedMimes.has(String(file.mimetype || "").toLowerCase())) {
             const err = new Error("Only PDF and image uploads are allowed.");

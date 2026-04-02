@@ -57,6 +57,13 @@ exports.createUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     if (!roleNorm) {
         return res.status(400).json({ success: false, message: "Role is required" });
     }
+    if (!phoneNorm) {
+        return res.status(400).json({
+            success: false,
+            message: "Phone is required",
+            errors: { phone: { message: "Phone is required" } },
+        });
+    }
     const userExists = await User_model_1.default.findOne({ email: { $in: (0, emailAddress_1.emailLookupCandidates)(email) } }).collation({
         locale: "en",
         strength: 2,

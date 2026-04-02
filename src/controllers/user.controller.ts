@@ -58,6 +58,13 @@ export const createUser = asyncHandler(async (req: any, res: any) => {
   if (!roleNorm) {
     return res.status(400).json({ success: false, message: "Role is required" });
   }
+  if (!phoneNorm) {
+    return res.status(400).json({
+      success: false,
+      message: "Phone is required",
+      errors: { phone: { message: "Phone is required" } },
+    });
+  }
 
   const userExists = await User.findOne({ email: { $in: emailLookupCandidates(email) } }).collation({
     locale: "en",

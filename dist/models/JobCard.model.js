@@ -8,7 +8,7 @@ const serviceJobSchema = new mongoose_1.default.Schema({
     sn: Number,
     jobName: String,
     specification: String,
-    componentsUsed: { type: [String], default: [] }, // multiple spares/components
+    componentsUsed: { type: [mongoose_1.default.Schema.Types.Mixed], default: [] }, // supports string[] (legacy) or { name, qty }[]
     qty: Number,
     reason: String,
     date: Date,

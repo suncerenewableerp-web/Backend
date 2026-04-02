@@ -40,6 +40,14 @@ export const signup = asyncHandler(async (req: any, res: any) => {
       message: "Only CUSTOMER signup is allowed. Please contact an administrator for access.",
     });
   }
+
+  if (!phoneNorm) {
+    return res.status(400).json({
+      success: false,
+      message: "Phone is required",
+      errors: { phone: { message: "Phone is required" } },
+    });
+  }
   
   const userExists = await User.findOne({ email: { $in: emailLookupCandidates(email) } }).collation(EMAIL_COLLATION);
   if (userExists) return res.status(400).json({ success: false, message: 'User already exists' });

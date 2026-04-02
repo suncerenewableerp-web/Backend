@@ -41,6 +41,13 @@ exports.signup = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             message: "Only CUSTOMER signup is allowed. Please contact an administrator for access.",
         });
     }
+    if (!phoneNorm) {
+        return res.status(400).json({
+            success: false,
+            message: "Phone is required",
+            errors: { phone: { message: "Phone is required" } },
+        });
+    }
     const userExists = await User_model_1.default.findOne({ email: { $in: (0, emailAddress_1.emailLookupCandidates)(email) } }).collation(EMAIL_COLLATION);
     if (userExists)
         return res.status(400).json({ success: false, message: 'User already exists' });

@@ -75,6 +75,7 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
   }
 
   const ticketsQuery = Ticket.find(query)
+    .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
     .populate('statusHistory.changedBy', 'name')
     .sort('-createdAt')
@@ -161,6 +162,8 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
       // Customer may raise a complaint on behalf of a person in their org.
       // Default to their account name if not provided.
       name: String(inputCustomer?.name || '').trim() || req.user.name,
+      // Default email to the signup email (but don't overwrite if provided).
+      ...(inputCustomer?.email ? {} : req.user.email ? { email: req.user.email } : {}),
       // Keep safe defaults for company/phone (but don't overwrite if provided).
       ...(inputCustomer?.company ? {} : req.user.company ? { company: req.user.company } : {}),
       ...(inputCustomer?.phone ? {} : req.user.phone ? { phone: req.user.phone } : {}),
@@ -188,6 +191,7 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
 export const getTicket = asyncHandler(async (req: any, res: any) => {
   const roleName = String(req.user?.role?.name || "").toUpperCase();
   const ticketQuery = Ticket.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+    .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
     .populate('jobCard')
     .populate('logistics')
@@ -316,6 +320,7 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   }
 
   await ticket.save();
+  await ticket.populate('createdBy', 'email name phone');
   await ticket.populate('statusHistory.changedBy', 'name');
   await ticket.populate('logistics');
   res.json({ success: true, data: ticket });

@@ -14,6 +14,12 @@ const ticketSchema = new mongoose_1.default.Schema({
     customer: {
         name: String,
         phone: String,
+        email: {
+            type: String,
+            trim: true,
+            lowercase: true,
+            match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please use a valid email'],
+        },
         company: String,
         address: String
     },

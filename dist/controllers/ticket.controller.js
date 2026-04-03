@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.updateTicket = exports.getTicket = exports.createTicket = exports.getTickets = void 0;
+exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
@@ -173,8 +173,8 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         };
     }
     const ticket = await Ticket_model_1.default.create({
-        createdBy: req.user?._id,
         ...body,
+        createdBy: req.user?._id,
         statusHistory: [{ status: 'CREATED', changedBy: req.user._id }]
     });
     await ticket.populate('statusHistory.changedBy', 'name');
@@ -185,6 +185,83 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         }
     }
     res.status(201).json({ success: true, data });
+});
+// @desc    Create multiple tickets (bulk)
+// @route   POST /api/tickets/bulk
+exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const raw = req.body?.tickets;
+    if (!Array.isArray(raw) || raw.length === 0) {
+        return res.status(400).json({ success: false, message: "tickets must be a non-empty array" });
+    }
+    const maxBulk = 25;
+    if (raw.length > maxBulk) {
+        return res.status(400).json({
+            success: false,
+            message: `Too many tickets in one request. Max ${maxBulk}.`,
+        });
+    }
+    const bodies = raw.map((t) => (t && typeof t === "object" ? { ...t } : null));
+    if (bodies.some((b) => !b)) {
+        return res.status(400).json({ success: false, message: "Each ticket must be an object" });
+    }
+    const ticketIds = bodies.map((b) => String(b.ticketId || "").trim());
+    const missingTicketId = ticketIds.findIndex((id) => !id);
+    if (missingTicketId !== -1) {
+        return res.status(400).json({
+            success: false,
+            message: `ticketId is required for each ticket (missing at index ${missingTicketId})`,
+        });
+    }
+    const uniq = new Set(ticketIds);
+    if (uniq.size !== ticketIds.length) {
+        return res.status(400).json({
+            success: false,
+            message: "Duplicate ticketId found in request payload",
+        });
+    }
+    const existing = await Ticket_model_1.default.find({ ticketId: { $in: ticketIds } }).select("ticketId").lean();
+    if (existing.length) {
+        const ids = existing
+            .map((r) => String(r?.ticketId || "").trim())
+            .filter(Boolean)
+            .slice(0, 10);
+        return res.status(400).json({
+            success: false,
+            message: `One or more ticketId already exists: ${ids.join(", ")}${existing.length > 10 ? "…" : ""}`,
+        });
+    }
+    // If a customer raises tickets, bind each row to their identity so they can
+    // consistently see it later (and can't spoof another customer).
+    if (roleName === "CUSTOMER") {
+        for (const body of bodies) {
+            const inputCustomer = typeof body.customer === "object" && body.customer ? body.customer : {};
+            body.customer = {
+                ...inputCustomer,
+                name: String(inputCustomer?.name || "").trim() || req.user.name,
+                ...(inputCustomer?.email ? {} : req.user.email ? { email: req.user.email } : {}),
+                ...(inputCustomer?.company ? {} : req.user.company ? { company: req.user.company } : {}),
+                ...(inputCustomer?.phone ? {} : req.user.phone ? { phone: req.user.phone } : {}),
+            };
+        }
+    }
+    const payload = bodies.map((body) => ({
+        ...body,
+        createdBy: req.user?._id,
+        statusHistory: [{ status: "CREATED", changedBy: req.user._id }],
+    }));
+    const created = await Ticket_model_1.default.insertMany(payload, { ordered: true });
+    await Ticket_model_1.default.populate(created, { path: "statusHistory.changedBy", select: "name" });
+    const tickets = (created || []).map((t) => {
+        const obj = typeof t?.toObject === "function" ? t.toObject() : t;
+        if (roleName === "CUSTOMER") {
+            if (obj?.inverter && Object.prototype.hasOwnProperty.call(obj.inverter, "warrantyEnd")) {
+                delete obj.inverter.warrantyEnd;
+            }
+        }
+        return obj;
+    });
+    res.status(201).json({ success: true, data: { tickets } });
 });
 // @desc    Get single ticket
 // @route   GET /api/tickets/:id

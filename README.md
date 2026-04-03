@@ -166,6 +166,7 @@ Authorization: Bearer <accessToken>
 |--------|------------------------|----------------------|-----------------------|
 | GET    | /                      | tickets:view         | List tickets          |
 | POST   | /                      | tickets:create       | Create ticket         |
+| POST   | /bulk                  | tickets:create       | Create tickets (bulk) |
 | GET    | /:id                   | tickets:view         | Get ticket detail     |
 | PUT    | /:id                   | tickets:edit         | Update ticket/status  |
 | DELETE | /:id                   | tickets:delete       | Delete ticket         |

@@ -3,6 +3,7 @@ import { verifyToken, authorize } from "../middleware/auth.middleware";
 import {
   getTickets,
   createTicket,
+  createTicketsBulk,
   getTicket,
   updateTicket,
   getTicketPickupDetails,
@@ -21,6 +22,7 @@ router.use(verifyToken);
 
 router.get('/', authorize('tickets', 'view'), asyncHandler(getTickets));
 router.post('/', authorize('tickets', 'create'), asyncHandler(createTicket));
+router.post('/bulk', authorize('tickets', 'create'), asyncHandler(createTicketsBulk));
 router.get('/:id/pickup-details', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(getTicketPickupDetails));
 router.post('/:id/pickup-details', authorize('tickets', 'edit'), validate([validateTicketId]), asyncHandler(upsertTicketPickupDetails));
 router.post(

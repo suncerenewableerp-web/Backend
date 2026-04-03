@@ -13,6 +13,7 @@ const router = express_1.default.Router();
 router.use(auth_middleware_1.verifyToken);
 router.get('/', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(ticket_controller_1.getTickets));
 router.post('/', (0, auth_middleware_1.authorize)('tickets', 'create'), (0, error_middleware_1.asyncHandler)(ticket_controller_1.createTicket));
+router.post('/bulk', (0, auth_middleware_1.authorize)('tickets', 'create'), (0, error_middleware_1.asyncHandler)(ticket_controller_1.createTicketsBulk));
 router.get('/:id/pickup-details', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId]), (0, error_middleware_1.asyncHandler)(ticket_controller_1.getTicketPickupDetails));
 router.post('/:id/pickup-details', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId]), (0, error_middleware_1.asyncHandler)(ticket_controller_1.upsertTicketPickupDetails));
 router.post("/:id/pickup-documents", (0, auth_middleware_1.authorize)("tickets", "edit"), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId]), upload_middleware_1.pickupDocumentUpload.single("file"), (0, error_middleware_1.asyncHandler)(ticket_controller_1.uploadTicketPickupDocument));

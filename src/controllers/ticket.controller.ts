@@ -188,8 +188,8 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
   }
 
   const ticket = await Ticket.create({
-    createdBy: req.user?._id,
     ...body,
+    createdBy: req.user?._id,
     statusHistory: [{ status: 'CREATED', changedBy: req.user._id }]
   });
   
@@ -201,6 +201,96 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
     }
   }
   res.status(201).json({ success: true, data });
+});
+
+// @desc    Create multiple tickets (bulk)
+// @route   POST /api/tickets/bulk
+export const createTicketsBulk = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  const raw = req.body?.tickets;
+
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return res.status(400).json({ success: false, message: "tickets must be a non-empty array" });
+  }
+
+  const maxBulk = 25;
+  if (raw.length > maxBulk) {
+    return res.status(400).json({
+      success: false,
+      message: `Too many tickets in one request. Max ${maxBulk}.`,
+    });
+  }
+
+  const bodies: any[] = raw.map((t: any) => (t && typeof t === "object" ? { ...t } : null));
+  if (bodies.some((b) => !b)) {
+    return res.status(400).json({ success: false, message: "Each ticket must be an object" });
+  }
+
+  const ticketIds = bodies.map((b) => String(b.ticketId || "").trim());
+  const missingTicketId = ticketIds.findIndex((id) => !id);
+  if (missingTicketId !== -1) {
+    return res.status(400).json({
+      success: false,
+      message: `ticketId is required for each ticket (missing at index ${missingTicketId})`,
+    });
+  }
+
+  const uniq = new Set(ticketIds);
+  if (uniq.size !== ticketIds.length) {
+    return res.status(400).json({
+      success: false,
+      message: "Duplicate ticketId found in request payload",
+    });
+  }
+
+  const existing = await Ticket.find({ ticketId: { $in: ticketIds } }).select("ticketId").lean();
+  if (existing.length) {
+    const ids = existing
+      .map((r: any) => String(r?.ticketId || "").trim())
+      .filter(Boolean)
+      .slice(0, 10);
+    return res.status(400).json({
+      success: false,
+      message: `One or more ticketId already exists: ${ids.join(", ")}${existing.length > 10 ? "…" : ""}`,
+    });
+  }
+
+  // If a customer raises tickets, bind each row to their identity so they can
+  // consistently see it later (and can't spoof another customer).
+  if (roleName === "CUSTOMER") {
+    for (const body of bodies) {
+      const inputCustomer =
+        typeof body.customer === "object" && body.customer ? body.customer : {};
+      body.customer = {
+        ...inputCustomer,
+        name: String(inputCustomer?.name || "").trim() || req.user.name,
+        ...(inputCustomer?.email ? {} : req.user.email ? { email: req.user.email } : {}),
+        ...(inputCustomer?.company ? {} : req.user.company ? { company: req.user.company } : {}),
+        ...(inputCustomer?.phone ? {} : req.user.phone ? { phone: req.user.phone } : {}),
+      };
+    }
+  }
+
+  const payload = bodies.map((body) => ({
+    ...body,
+    createdBy: req.user?._id,
+    statusHistory: [{ status: "CREATED", changedBy: req.user._id }],
+  }));
+
+  const created = await Ticket.insertMany(payload, { ordered: true });
+  await Ticket.populate(created, { path: "statusHistory.changedBy", select: "name" });
+
+  const tickets = (created || []).map((t: any) => {
+    const obj = typeof t?.toObject === "function" ? t.toObject() : t;
+    if (roleName === "CUSTOMER") {
+      if (obj?.inverter && Object.prototype.hasOwnProperty.call(obj.inverter, "warrantyEnd")) {
+        delete obj.inverter.warrantyEnd;
+      }
+    }
+    return obj;
+  });
+
+  res.status(201).json({ success: true, data: { tickets } });
 });
 
 // @desc    Get single ticket

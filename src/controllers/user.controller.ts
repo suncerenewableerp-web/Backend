@@ -183,3 +183,24 @@ export const getEngineers = asyncHandler(async (req: any, res: any) => {
     
   res.json({ success: true, data: engineers });
 });
+
+// @desc    Get engineer names for dropdowns (internal use)
+// @route   GET /api/users/engineer-names
+export const getEngineerNames = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (!["ADMIN", "SALES", "ENGINEER"].includes(roleName)) {
+    return res.status(403).json({ success: false, message: "Access denied" });
+  }
+
+  const engineerRole = await Role.findOne({ name: "ENGINEER" }).select("_id");
+  if (!engineerRole) return res.json({ success: true, data: [] });
+
+  const engineers = await User.find({ role: engineerRole._id, isActive: true })
+    .select("name")
+    .sort("name");
+
+  res.json({
+    success: true,
+    data: engineers.map((u: any) => ({ id: String(u?._id || ""), name: String(u?.name || "") })),
+  });
+});

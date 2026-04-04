@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getEngineers = exports.resetUserPassword = exports.setUserPassword = exports.createUser = exports.getUsers = void 0;
+exports.getEngineerNames = exports.getEngineers = exports.resetUserPassword = exports.setUserPassword = exports.createUser = exports.getUsers = void 0;
 const User_model_1 = __importDefault(require("../models/User.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
@@ -162,4 +162,22 @@ exports.getEngineers = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         .select('-password')
         .sort('name');
     res.json({ success: true, data: engineers });
+});
+// @desc    Get engineer names for dropdowns (internal use)
+// @route   GET /api/users/engineer-names
+exports.getEngineerNames = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (!["ADMIN", "SALES", "ENGINEER"].includes(roleName)) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+    }
+    const engineerRole = await Role_model_1.default.findOne({ name: "ENGINEER" }).select("_id");
+    if (!engineerRole)
+        return res.json({ success: true, data: [] });
+    const engineers = await User_model_1.default.find({ role: engineerRole._id, isActive: true })
+        .select("name")
+        .sort("name");
+    res.json({
+        success: true,
+        data: engineers.map((u) => ({ id: String(u?._id || ""), name: String(u?.name || "") })),
+    });
 });

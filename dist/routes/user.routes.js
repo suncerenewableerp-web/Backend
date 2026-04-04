@@ -13,5 +13,6 @@ router.get('/', (0, auth_middleware_1.authorize)("users", "view"), (0, error_mid
 router.post('/', (0, auth_middleware_1.authorize)("users", "create"), (0, error_middleware_1.asyncHandler)(user_controller_1.createUser));
 router.put('/:id/password', (0, auth_middleware_1.authorize)("users", "edit"), (0, error_middleware_1.asyncHandler)(user_controller_1.setUserPassword));
 router.post('/:id/password/reset', (0, auth_middleware_1.authorize)("users", "edit"), (0, error_middleware_1.asyncHandler)(user_controller_1.resetUserPassword));
+router.get('/engineer-names', (0, error_middleware_1.asyncHandler)(user_controller_1.getEngineerNames));
 router.get('/engineers', (0, auth_middleware_1.authorize)("users", "view"), (0, error_middleware_1.asyncHandler)(user_controller_1.getEngineers));
 exports.default = router;

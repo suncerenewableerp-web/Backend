@@ -13,6 +13,7 @@ router.get('/', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error
 router.post('/', (0, auth_middleware_1.authorize)('logistics', 'create'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.createLogistics));
 router.post('/schedule-pickup', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.schedulePickup));
 router.post('/under-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.saveUnderDispatch));
+router.post('/approve-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.approveDispatch));
 router.post('/schedule-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.scheduleDispatch));
 router.put('/:id', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.updateTracking));
 router.get('/ticket/:ticketId', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.getLogisticsByTicket));

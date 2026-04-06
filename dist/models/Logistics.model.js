@@ -43,6 +43,11 @@ const logisticsSchema = new mongoose_1.default.Schema({
     billing: {
         invoiceGenerated: { type: Boolean, default: false },
         paymentDone: { type: Boolean, default: false },
+        dispatchApprovalRequestedAt: Date,
+        dispatchApprovalRequestedBy: { type: mongoose_1.default.Schema.ObjectId, ref: "User" },
+        dispatchApproved: { type: Boolean, default: false },
+        dispatchApprovedAt: Date,
+        dispatchApprovedBy: { type: mongoose_1.default.Schema.ObjectId, ref: "User" },
     },
     issues: String,
     documents: [String] // PDFs, photos URLs

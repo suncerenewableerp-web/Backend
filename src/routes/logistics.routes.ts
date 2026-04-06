@@ -6,6 +6,7 @@ import {
   updateTracking,
   schedulePickup,
   saveUnderDispatch,
+  approveDispatch,
   scheduleDispatch,
   getLogisticsByTicket,
 } from "../controllers/logistics.controller";
@@ -19,6 +20,7 @@ router.get('/', authorize('logistics', 'view'), asyncHandler(getLogistics));
 router.post('/', authorize('logistics', 'create'), asyncHandler(createLogistics));
 router.post('/schedule-pickup', authorize('logistics', 'edit'), asyncHandler(schedulePickup));
 router.post('/under-dispatch', authorize('logistics', 'edit'), asyncHandler(saveUnderDispatch));
+router.post('/approve-dispatch', authorize('logistics', 'edit'), asyncHandler(approveDispatch));
 router.post('/schedule-dispatch', authorize('logistics', 'edit'), asyncHandler(scheduleDispatch));
 router.put('/:id', authorize('logistics', 'edit'), asyncHandler(updateTracking));
 router.get('/ticket/:ticketId', authorize('logistics', 'view'), asyncHandler(getLogisticsByTicket));

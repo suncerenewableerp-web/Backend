@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
+exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.approveInstallationDone = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
@@ -45,17 +45,12 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     // Role-scoped visibility
     const roleName = String(req.user?.role?.name || "").toUpperCase();
     if (roleName === 'ENGINEER') {
-        // Engineers should always see their assigned tickets, and also the shared pool of
-        // tickets that have reached UNDER_REPAIRED (work starts from there).
+        // Engineers should only receive work when Sales/Admin moves it to UNDER_REPAIRED.
         const finalizedRows = await JobCard_model_1.default.find({ engineerFinalizedBy: req.user._id })
             .select("ticket")
             .lean();
         const finalizedTicketIds = Array.from(new Set((finalizedRows || []).map((r) => String(r?.ticket || "")).filter(Boolean)));
-        // Backfill: attach engineer to their finalized tickets so CLOSED tickets show in their list.
-        if (finalizedTicketIds.length) {
-            await Ticket_model_1.default.updateMany({ _id: { $in: finalizedTicketIds }, assignedTo: { $ne: req.user._id } }, { $addToSet: { assignedTo: req.user._id } }).catch(() => { });
-        }
-        const visibilityOr = [{ assignedTo: req.user._id }, { status: "UNDER_REPAIRED" }];
+        const visibilityOr = [{ status: "UNDER_REPAIRED" }];
         if (finalizedTicketIds.length)
             visibilityOr.push({ _id: { $in: finalizedTicketIds } });
         const existingSearchOr = query.$or;
@@ -108,7 +103,7 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
 function ticketScopeQuery(user) {
     const roleName = String(user?.role?.name || "").toUpperCase();
     if (roleName === 'ENGINEER') {
-        return { $or: [{ assignedTo: user._id }, { status: "UNDER_REPAIRED" }] };
+        return { status: "UNDER_REPAIRED" };
     }
     if (roleName === 'CUSTOMER') {
         const legacyMatch = user?.phone
@@ -131,6 +126,7 @@ const STATUS_FLOW = [
     'UNDER_REPAIRED',
     'UNDER_DISPATCH',
     'DISPATCHED',
+    'INSTALLATION_DONE',
     'CLOSED',
 ];
 function normalizeFlowStatus(raw) {
@@ -322,6 +318,7 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         'UNDER_REPAIRED',
         'UNDER_DISPATCH',
         'DISPATCHED',
+        'INSTALLATION_DONE',
         'CLOSED',
     ]);
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
@@ -351,6 +348,19 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         const nextFlow = normalizeFlowStatus(body.status);
         const prevIdx = STATUS_FLOW.indexOf(prevFlow);
         const nextIdx = STATUS_FLOW.indexOf(nextFlow);
+        // Business rule: Sales can proceed to DISPATCHED only after Admin approval.
+        if (roleNorm === "SALES" && nextFlow === "DISPATCHED") {
+            const delivery = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" })
+                .select("billing.dispatchApproved")
+                .lean();
+            const approved = Boolean(delivery?.billing?.dispatchApproved);
+            if (!approved) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Dispatch requires Admin approval. Please wait for Admin to approve the dispatch request.",
+                });
+            }
+        }
         if (prevFlow === 'CLOSED' && nextFlow !== 'CLOSED') {
             return res.status(400).json({ success: false, message: 'Closed tickets cannot be reopened.' });
         }
@@ -427,6 +437,46 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
     await ticket.populate('statusHistory.changedBy', 'name');
     await ticket.populate('logistics');
     res.json({ success: true, data: ticket });
+});
+// @desc    Approve installation (moves ticket DISPATCHED -> INSTALLATION_DONE)
+// @route   POST /api/tickets/:id/installation-done
+exports.approveInstallationDone = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+    if (roleNorm !== "CUSTOMER" && roleNorm !== "SALES" && roleNorm !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+        .populate("createdBy", "email name phone")
+        .populate("assignedTo", "name")
+        .populate("statusHistory.changedBy", "name")
+        .populate("logistics");
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+    }
+    const current = normalizeFlowStatus(ticket.status);
+    if (current === "INSTALLATION_DONE") {
+        return res.status(200).json({ success: true, data: ticket });
+    }
+    if (current !== "DISPATCHED") {
+        return res.status(400).json({
+            success: false,
+            message: "Installation can be approved only after the ticket is DISPATCHED.",
+        });
+    }
+    ticket.status = "INSTALLATION_DONE";
+    ticket.installation = {
+        ...ticket.installation,
+        approved: true,
+        approvedAt: new Date(),
+        approvedBy: req.user?._id,
+        approvedByRole: roleNorm,
+    };
+    ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
+    await ticket.save();
+    await ticket.populate("statusHistory.changedBy", "name");
+    res.status(200).json({ success: true, data: ticket });
 });
 // @desc    Get pickup details for a ticket (customer-friendly)
 // @route   GET /api/tickets/:id/pickup-details
@@ -635,6 +685,7 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
     }
     const patch = pickJobCardUpdate(req.body);
     const requestedFinal = String(req.body?.engineerFinalStatus || "").toUpperCase().trim();
+    const requestedFinalizedAt = toDateOrNull(req.body?.engineerFinalizedAt);
     const canSetFinal = requestedFinal === "REPAIRABLE" || requestedFinal === "NOT_REPAIRABLE";
     const roleName = String(req.user?.role?.name || "").toUpperCase();
     const created = !jobcard;
@@ -666,7 +717,7 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
             });
         }
         jobcard.engineerFinalStatus = requestedFinal;
-        jobcard.engineerFinalizedAt = new Date();
+        jobcard.engineerFinalizedAt = requestedFinalizedAt || new Date();
         jobcard.engineerFinalizedBy = req.user?._id;
         await jobcard.save();
         // Notify sales/admin when engineer scraps the unit.

@@ -3,11 +3,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.scheduleDispatch = exports.saveUnderDispatch = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
+exports.scheduleDispatch = exports.approveDispatch = exports.saveUnderDispatch = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
+const Role_model_1 = __importDefault(require("../models/Role.model"));
+const User_model_1 = __importDefault(require("../models/User.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
+const email_1 = require("../utils/email");
 // @desc    Get all logistics
 // @route   GET /api/logistics
 exports.getLogistics = (0, error_middleware_1.asyncHandler)(async (req, res) => {
@@ -145,11 +148,11 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
     if (String(ticket.status || "").toUpperCase() === "CLOSED") {
         return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
     }
-    const allowed = ["UNDER_REPAIRED", "UNDER_DISPATCH", "DISPATCHED"];
+    const allowed = ["UNDER_REPAIRED", "UNDER_DISPATCH", "DISPATCHED", "INSTALLATION_DONE"];
     if (!allowed.includes(String(ticket.status || "").toUpperCase())) {
         return res.status(400).json({
             success: false,
-            message: "Under-dispatch review is allowed only when the ticket is UNDER_REPAIRED, UNDER_DISPATCH or DISPATCHED.",
+            message: "Under-dispatch review is allowed only when the ticket is UNDER_REPAIRED, UNDER_DISPATCH, DISPATCHED or INSTALLATION_DONE.",
         });
     }
     const setPatch = {};
@@ -168,6 +171,15 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
         logistics.billing.invoiceGenerated = invoiceGenerated;
     if (paymentDone !== null)
         logistics.billing.paymentDone = paymentDone;
+    const roleNorm = String(roleName || "").toUpperCase();
+    const shouldRequestApproval = roleNorm === "SALES" && !Boolean(logistics.billing.dispatchApproved);
+    const newlyRequested = shouldRequestApproval && !logistics.billing.dispatchApprovalRequestedAt;
+    if (shouldRequestApproval) {
+        if (!logistics.billing.dispatchApprovalRequestedAt) {
+            logistics.billing.dispatchApprovalRequestedAt = new Date();
+            logistics.billing.dispatchApprovalRequestedBy = req.user?._id;
+        }
+    }
     await logistics.save();
     await logistics.populate("ticket");
     ticket.logistics = logistics._id;
@@ -176,11 +188,72 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
         ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
     }
     await ticket.save();
+    if (newlyRequested) {
+        try {
+            const adminRole = await Role_model_1.default.findOne({ name: "ADMIN" }).select("_id name").lean();
+            const adminRoleId = adminRole?._id;
+            if (adminRoleId) {
+                const rows = await User_model_1.default.find({ role: adminRoleId, isActive: true })
+                    .select("email name")
+                    .lean();
+                const emails = Array.from(new Set((rows || [])
+                    .map((u) => String(u?.email || "").trim().toLowerCase())
+                    .filter(Boolean)));
+                if (emails.length) {
+                    const ticketCode = String(ticket.ticketId || ticket._id || "");
+                    const who = String(req.user?.name || req.user?._id || "");
+                    const subject = `Dispatch approval requested: ${ticketCode}`;
+                    const text = `Sales requested dispatch approval for ticket ${ticketCode}.\n\n` +
+                        `Requested by: ${who}\n` +
+                        `Invoice generated: ${Boolean(logistics?.billing?.invoiceGenerated) ? "YES" : "NO"}\n` +
+                        `Payment done: ${Boolean(logistics?.billing?.paymentDone) ? "YES" : "NO"}\n\n` +
+                        `Please approve dispatch in ERP to allow Sales to proceed.`;
+                    await Promise.all(emails.map((to) => (0, email_1.sendEmail)({ to, subject, text }).catch(() => ({ sent: false }))));
+                }
+            }
+        }
+        catch (e) {
+            console.warn("📧 Dispatch approval notification failed:", e?.message || e);
+        }
+    }
     res.status(201).json({
         success: true,
         data: {
             invoiceGenerated: Boolean(logistics?.billing?.invoiceGenerated),
             paymentDone: Boolean(logistics?.billing?.paymentDone),
+        },
+    });
+});
+// @desc    Admin approves dispatch request for a ticket
+// @route   POST /api/logistics/approve-dispatch
+exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticketId = String(req.body?.ticketId || "").trim();
+    if (!ticketId) {
+        return res.status(400).json({ success: false, message: "ticketId is required" });
+    }
+    const ticket = await Ticket_model_1.default.findById(ticketId);
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    let logistics = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" });
+    if (!logistics) {
+        logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
+    }
+    logistics.billing = logistics.billing || {};
+    logistics.billing.dispatchApproved = true;
+    logistics.billing.dispatchApprovedAt = new Date();
+    logistics.billing.dispatchApprovedBy = req.user?._id;
+    await logistics.save();
+    ticket.logistics = logistics._id;
+    await ticket.save().catch(() => { });
+    res.status(200).json({
+        success: true,
+        data: {
+            dispatchApproved: true,
+            dispatchApprovedAt: logistics.billing.dispatchApprovedAt,
         },
     });
 });
@@ -211,17 +284,20 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
             message: "Dispatch is allowed only when the ticket is UNDER_DISPATCH or DISPATCHED.",
         });
     }
-    const setPatch = {
-        status: "IN_TRANSIT",
-        "pickupDetails.scheduledDate": dispatchDate,
-        "pickupDetails.pickupLocation": dispatchLocation,
-        "courierDetails.courierName": courierName,
-        "courierDetails.lrNumber": lrNumber,
-    };
     // Avoid upsert update-path conflicts on `type` by using find/create + save.
     let logistics = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" });
     if (!logistics) {
         logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
+    }
+    const roleNorm = String(roleName || "").toUpperCase();
+    if (roleNorm === "SALES") {
+        const approved = Boolean(logistics?.billing?.dispatchApproved);
+        if (!approved) {
+            return res.status(403).json({
+                success: false,
+                message: "Dispatch requires Admin approval. Please wait for Admin to approve the dispatch request.",
+            });
+        }
     }
     logistics.status = "IN_TRANSIT";
     logistics.pickupDetails = logistics.pickupDetails || {};

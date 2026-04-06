@@ -6,6 +6,7 @@ import {
   createTicketsBulk,
   getTicket,
   updateTicket,
+  approveInstallationDone,
   getTicketPickupDetails,
   upsertTicketPickupDetails,
   uploadTicketPickupDocument,
@@ -25,6 +26,7 @@ router.post('/', authorize('tickets', 'create'), asyncHandler(createTicket));
 router.post('/bulk', authorize('tickets', 'create'), asyncHandler(createTicketsBulk));
 router.get('/:id/pickup-details', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(getTicketPickupDetails));
 router.post('/:id/pickup-details', authorize('tickets', 'edit'), validate([validateTicketId]), asyncHandler(upsertTicketPickupDetails));
+router.post('/:id/installation-done', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(approveInstallationDone));
 router.post(
   "/:id/pickup-documents",
   authorize("tickets", "edit"),

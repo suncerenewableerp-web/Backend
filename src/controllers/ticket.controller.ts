@@ -43,8 +43,7 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
   // Role-scoped visibility
   const roleName = String(req.user?.role?.name || "").toUpperCase();
   if (roleName === 'ENGINEER') {
-    // Engineers should always see their assigned tickets, and also the shared pool of
-    // tickets that have reached UNDER_REPAIRED (work starts from there).
+    // Engineers should only receive work when Sales/Admin moves it to UNDER_REPAIRED.
     const finalizedRows = await JobCard.find({ engineerFinalizedBy: req.user._id })
       .select("ticket")
       .lean();
@@ -52,15 +51,7 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
       new Set((finalizedRows || []).map((r: any) => String(r?.ticket || "")).filter(Boolean)),
     );
 
-    // Backfill: attach engineer to their finalized tickets so CLOSED tickets show in their list.
-    if (finalizedTicketIds.length) {
-      await Ticket.updateMany(
-        { _id: { $in: finalizedTicketIds }, assignedTo: { $ne: req.user._id } },
-        { $addToSet: { assignedTo: req.user._id } },
-      ).catch(() => {});
-    }
-
-    const visibilityOr: any[] = [{ assignedTo: req.user._id }, { status: "UNDER_REPAIRED" }];
+    const visibilityOr: any[] = [{ status: "UNDER_REPAIRED" }];
     if (finalizedTicketIds.length) visibilityOr.push({ _id: { $in: finalizedTicketIds } });
     const existingSearchOr = query.$or;
     delete query.$or;
@@ -119,7 +110,7 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
 function ticketScopeQuery(user) {
   const roleName = String(user?.role?.name || "").toUpperCase();
   if (roleName === 'ENGINEER') {
-    return { $or: [{ assignedTo: user._id }, { status: "UNDER_REPAIRED" }] };
+    return { status: "UNDER_REPAIRED" };
   }
   if (roleName === 'CUSTOMER') {
     const legacyMatch: Record<string, any> =
@@ -144,6 +135,7 @@ const STATUS_FLOW = [
   'UNDER_REPAIRED',
   'UNDER_DISPATCH',
   'DISPATCHED',
+  'INSTALLATION_DONE',
   'CLOSED',
 ];
 
@@ -356,6 +348,7 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
     'UNDER_REPAIRED',
     'UNDER_DISPATCH',
     'DISPATCHED',
+    'INSTALLATION_DONE',
     'CLOSED',
   ]);
 
@@ -390,6 +383,20 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
     const nextFlow = normalizeFlowStatus(body.status);
     const prevIdx = STATUS_FLOW.indexOf(prevFlow);
     const nextIdx = STATUS_FLOW.indexOf(nextFlow);
+
+    // Business rule: Sales can proceed to DISPATCHED only after Admin approval.
+    if (roleNorm === "SALES" && nextFlow === "DISPATCHED") {
+      const delivery: any = await Logistics.findOne({ ticket: ticket._id, type: "DELIVERY" })
+        .select("billing.dispatchApproved")
+        .lean();
+      const approved = Boolean(delivery?.billing?.dispatchApproved);
+      if (!approved) {
+        return res.status(403).json({
+          success: false,
+          message: "Dispatch requires Admin approval. Please wait for Admin to approve the dispatch request.",
+        });
+      }
+    }
 
     if (prevFlow === 'CLOSED' && nextFlow !== 'CLOSED') {
       return res.status(400).json({ success: false, message: 'Closed tickets cannot be reopened.' });
@@ -454,6 +461,51 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   await ticket.populate('statusHistory.changedBy', 'name');
   await ticket.populate('logistics');
   res.json({ success: true, data: ticket });
+});
+
+// @desc    Approve installation (moves ticket DISPATCHED -> INSTALLATION_DONE)
+// @route   POST /api/tickets/:id/installation-done
+export const approveInstallationDone = asyncHandler(async (req: any, res: any) => {
+  const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+  if (roleNorm !== "CUSTOMER" && roleNorm !== "SALES" && roleNorm !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const ticket = await Ticket.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+    .populate("createdBy", "email name phone")
+    .populate("assignedTo", "name")
+    .populate("statusHistory.changedBy", "name")
+    .populate("logistics");
+  if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
+
+  if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+    return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+  }
+
+  const current = normalizeFlowStatus(ticket.status);
+  if (current === "INSTALLATION_DONE") {
+    return res.status(200).json({ success: true, data: ticket });
+  }
+  if (current !== "DISPATCHED") {
+    return res.status(400).json({
+      success: false,
+      message: "Installation can be approved only after the ticket is DISPATCHED.",
+    });
+  }
+
+  ticket.status = "INSTALLATION_DONE";
+  (ticket as any).installation = {
+    ...(ticket as any).installation,
+    approved: true,
+    approvedAt: new Date(),
+    approvedBy: req.user?._id,
+    approvedByRole: roleNorm,
+  };
+  ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
+
+  await ticket.save();
+  await ticket.populate("statusHistory.changedBy", "name");
+  res.status(200).json({ success: true, data: ticket });
 });
 
 // @desc    Get pickup details for a ticket (customer-friendly)
@@ -697,6 +749,7 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
 
   const patch = pickJobCardUpdate(req.body);
   const requestedFinal = String(req.body?.engineerFinalStatus || "").toUpperCase().trim();
+  const requestedFinalizedAt = toDateOrNull(req.body?.engineerFinalizedAt);
   const canSetFinal = requestedFinal === "REPAIRABLE" || requestedFinal === "NOT_REPAIRABLE";
   const roleName = String(req.user?.role?.name || "").toUpperCase();
 
@@ -731,7 +784,7 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
       });
     }
     (jobcard as any).engineerFinalStatus = requestedFinal;
-    (jobcard as any).engineerFinalizedAt = new Date();
+    (jobcard as any).engineerFinalizedAt = requestedFinalizedAt || new Date();
     (jobcard as any).engineerFinalizedBy = req.user?._id;
     await jobcard.save();
 

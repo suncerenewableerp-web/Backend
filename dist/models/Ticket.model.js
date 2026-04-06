@@ -51,6 +51,7 @@ const ticketSchema = new mongoose_1.default.Schema({
             'UNDER_REPAIRED',
             'UNDER_DISPATCH',
             'DISPATCHED',
+            'INSTALLATION_DONE',
             'CLOSED',
             // Legacy statuses kept for backward compatibility with existing DB rows
             'RECEIVED',
@@ -59,6 +60,12 @@ const ticketSchema = new mongoose_1.default.Schema({
             'TESTING',
         ],
         default: 'CREATED'
+    },
+    installation: {
+        approved: { type: Boolean, default: false },
+        approvedAt: Date,
+        approvedBy: { type: mongoose_1.default.Schema.ObjectId, ref: 'User' },
+        approvedByRole: String, // CUSTOMER | SALES | ADMIN
     },
     statusHistory: [{
             status: String,

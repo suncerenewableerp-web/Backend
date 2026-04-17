@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.approveInstallationDone = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
+exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketInstallationDocument = exports.getTicketInstallationDocuments = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.approveInstallationDone = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
@@ -103,7 +103,9 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
 function ticketScopeQuery(user) {
     const roleName = String(user?.role?.name || "").toUpperCase();
     if (roleName === 'ENGINEER') {
-        return { status: "UNDER_REPAIRED" };
+        // Engineers can always work on the repair stage, and can also access tickets explicitly
+        // assigned to them in later stages (dispatch/installation).
+        return { $or: [{ status: "UNDER_REPAIRED" }, { assignedTo: user._id }] };
     }
     if (roleName === 'CUSTOMER') {
         const legacyMatch = user?.phone
@@ -146,6 +148,35 @@ function toDateOrNull(v) {
     if (Number.isNaN(t))
         return null;
     return d;
+}
+function getInstallationDocs(ticket) {
+    const docs = ticket && typeof ticket === "object" ? ticket.installation?.documents : null;
+    return Array.isArray(docs) ? docs : [];
+}
+function mapInstallationDocsForResponse(docs) {
+    return (Array.isArray(docs) ? docs : []).map((d) => {
+        const obj = d && typeof d?.toObject === "function"
+            ? d.toObject()
+            : d && typeof d === "object"
+                ? { ...d }
+                : {};
+        const url = String(obj?.url || "");
+        return {
+            ...obj,
+            url: url ? (0, cloudinaryDownloadUrl_1.toCloudinaryPrivateDownloadUrl)(url, { expiresInSeconds: 24 * 60 * 60 }) : url,
+        };
+    });
+}
+function applyInstallationApproval(ticket, user) {
+    const roleNorm = String(user?.role?.name || "").toUpperCase();
+    ticket.status = "INSTALLATION_DONE";
+    ticket.installation = {
+        ...ticket.installation,
+        approved: true,
+        approvedAt: new Date(),
+        approvedBy: user?._id,
+        approvedByRole: roleNorm,
+    };
 }
 // @desc    Create ticket
 // @route   POST /api/tickets
@@ -373,10 +404,36 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
                 message: 'Please follow the workflow step-by-step. Skipping steps is not allowed.',
             });
         }
+        // Installation step requires at least one installation PDF to be uploaded first.
+        if (nextFlow === "INSTALLATION_DONE") {
+            const docsCount = getInstallationDocs(ticket).length;
+            if (!docsCount) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please upload installation PDF first, then mark installation as done.",
+                });
+            }
+        }
+        // Closing is allowed only after installation docs are present.
+        if (nextFlow === "CLOSED") {
+            const docsCount = getInstallationDocs(ticket).length;
+            if (!docsCount) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please upload installation PDF before closing the ticket.",
+                });
+            }
+        }
     }
     if (isTicketAdmin) {
-        if (Object.prototype.hasOwnProperty.call(body, 'status'))
-            ticket.set('status', body.status);
+        if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+            if (String(body.status || "").toUpperCase() === "INSTALLATION_DONE") {
+                applyInstallationApproval(ticket, req.user);
+            }
+            else {
+                ticket.set('status', body.status);
+            }
+        }
         if (Object.prototype.hasOwnProperty.call(body, 'slaStatus'))
             ticket.set('slaStatus', body.slaStatus);
         if (Object.prototype.hasOwnProperty.call(body, 'slaTargetDate'))
@@ -423,8 +480,14 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
             ticket.set('feedbackRating', body.feedbackRating);
     }
     if (roleNorm === 'ENGINEER') {
-        if (Object.prototype.hasOwnProperty.call(body, 'status'))
-            ticket.set('status', body.status);
+        if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+            if (String(body.status || "").toUpperCase() === "INSTALLATION_DONE") {
+                applyInstallationApproval(ticket, req.user);
+            }
+            else {
+                ticket.set('status', body.status);
+            }
+        }
     }
     if (ticket.status && ticket.status !== prevStatus) {
         ticket.statusHistory.push({
@@ -442,7 +505,7 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
 // @route   POST /api/tickets/:id/installation-done
 exports.approveInstallationDone = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleNorm = String(req.user?.role?.name || "").toUpperCase();
-    if (roleNorm !== "CUSTOMER" && roleNorm !== "SALES" && roleNorm !== "ADMIN") {
+    if (!["CUSTOMER", "SALES", "ADMIN", "ENGINEER"].includes(roleNorm)) {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
     const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
@@ -456,24 +519,26 @@ exports.approveInstallationDone = (0, error_middleware_1.asyncHandler)(async (re
         return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
     }
     const current = normalizeFlowStatus(ticket.status);
-    if (current === "INSTALLATION_DONE") {
-        return res.status(200).json({ success: true, data: ticket });
+    const docsCount = getInstallationDocs(ticket).length;
+    if (!docsCount) {
+        return res.status(400).json({
+            success: false,
+            message: "Please upload installation PDF first, then mark installation as done.",
+        });
     }
-    if (current !== "DISPATCHED") {
+    if (current !== "DISPATCHED" && current !== "INSTALLATION_DONE") {
         return res.status(400).json({
             success: false,
             message: "Installation can be approved only after the ticket is DISPATCHED.",
         });
     }
-    ticket.status = "INSTALLATION_DONE";
-    ticket.installation = {
-        ...ticket.installation,
-        approved: true,
-        approvedAt: new Date(),
-        approvedBy: req.user?._id,
-        approvedByRole: roleNorm,
-    };
-    ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
+    const prev = ticket.status;
+    const prevFlow = normalizeFlowStatus(prev);
+    const nextFlow = "INSTALLATION_DONE";
+    const shouldPushHistory = prevFlow !== nextFlow;
+    applyInstallationApproval(ticket, req.user);
+    if (shouldPushHistory)
+        ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
     await ticket.save();
     await ticket.populate("statusHistory.changedBy", "name");
     res.status(200).json({ success: true, data: ticket });
@@ -597,6 +662,86 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
         data: {
             url: (0, cloudinaryDownloadUrl_1.toCloudinaryPrivateDownloadUrl)(urlPath, { expiresInSeconds: 24 * 60 * 60 }),
             documents: (0, cloudinaryDownloadUrl_1.mapCloudinaryDocUrls)(pickup?.documents, { expiresInSeconds: 24 * 60 * 60 }),
+        },
+    });
+});
+// @desc    Get installation documents (PDF) for a ticket
+// @route   GET /api/tickets/:id/installation-documents
+exports.getTicketInstallationDocuments = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).select("status installation");
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    res.json({
+        success: true,
+        data: {
+            documents: mapInstallationDocsForResponse(getInstallationDocs(ticket)),
+        },
+    });
+});
+// @desc    Upload installation document (PDF) for a ticket (visible to all ticket viewers)
+// @route   POST /api/tickets/:id/installation-documents
+exports.uploadTicketInstallationDocument = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).select("status installation");
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+    }
+    const flow = normalizeFlowStatus(ticket.status);
+    if (flow !== "DISPATCHED" && flow !== "INSTALLATION_DONE") {
+        return res.status(400).json({
+            success: false,
+            message: "Installation documents can be uploaded only after the ticket is DISPATCHED.",
+        });
+    }
+    const file = req.file;
+    if (!file || !file.buffer) {
+        return res.status(400).json({ success: false, message: "Missing file upload" });
+    }
+    (0, cloudinary_1.ensureCloudinaryConfigured)();
+    const folder = String(process.env.CLOUDINARY_FOLDER || "sunce_erp/installation").trim() || "sunce_erp/installation";
+    const ticketSeg = String(req.params?.id || "ticket")
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]+/g, "_")
+        .slice(0, 40);
+    const stamp = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const publicId = `${ticketSeg}_${stamp}`;
+    const uploaded = await new Promise((resolve, reject) => {
+        const stream = cloudinary_1.cloudinary.uploader.upload_stream({
+            folder,
+            public_id: publicId,
+            resource_type: "auto",
+            access_mode: "public",
+        }, (err, result) => {
+            if (err)
+                return reject(err);
+            if (!result || !result.secure_url)
+                return reject(new Error("Cloudinary upload failed"));
+            resolve({ secure_url: String(result.secure_url) });
+        });
+        stream.end(file.buffer);
+    });
+    const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+    const doc = {
+        url: String(uploaded.secure_url),
+        uploadedAt: new Date(),
+        uploadedBy: req.user?._id,
+        uploadedByRole: roleNorm,
+        originalName: String(file.originalname || ""),
+        mimeType: String(file.mimetype || ""),
+        size: typeof file.size === "number" ? file.size : undefined,
+    };
+    ticket.installation = {
+        ...ticket.installation,
+        documents: [...getInstallationDocs(ticket), doc],
+    };
+    await ticket.save();
+    const docs = mapInstallationDocsForResponse(getInstallationDocs(ticket));
+    res.status(201).json({
+        success: true,
+        data: {
+            document: docs[docs.length - 1] || null,
+            documents: docs,
         },
     });
 });

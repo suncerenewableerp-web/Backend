@@ -10,12 +10,14 @@ import {
   getTicketPickupDetails,
   upsertTicketPickupDetails,
   uploadTicketPickupDocument,
+  getTicketInstallationDocuments,
+  uploadTicketInstallationDocument,
   getTicketJobCard,
   updateTicketJobCard,
 } from "../controllers/ticket.controller";
 import { asyncHandler } from "../middleware/error.middleware";
 import { validate, validateTicketId } from "../middleware/validate.middleware";
-import { pickupDocumentUpload } from "../middleware/upload.middleware";
+import { pickupDocumentUpload, installationDocumentUpload } from "../middleware/upload.middleware";
 
 const router = express.Router();
 
@@ -27,6 +29,14 @@ router.post('/bulk', authorize('tickets', 'create'), asyncHandler(createTicketsB
 router.get('/:id/pickup-details', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(getTicketPickupDetails));
 router.post('/:id/pickup-details', authorize('tickets', 'edit'), validate([validateTicketId]), asyncHandler(upsertTicketPickupDetails));
 router.post('/:id/installation-done', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(approveInstallationDone));
+router.get('/:id/installation-documents', authorize('tickets', 'view'), validate([validateTicketId]), asyncHandler(getTicketInstallationDocuments));
+router.post(
+  '/:id/installation-documents',
+  authorize('tickets', 'view'),
+  validate([validateTicketId]),
+  installationDocumentUpload.single('file'),
+  asyncHandler(uploadTicketInstallationDocument),
+);
 router.post(
   "/:id/pickup-documents",
   authorize("tickets", "edit"),

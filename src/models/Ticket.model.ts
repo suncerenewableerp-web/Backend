@@ -62,6 +62,15 @@ const ticketSchema = new mongoose.Schema({
     approvedAt: Date,
     approvedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     approvedByRole: String, // CUSTOMER | SALES | ADMIN
+    documents: [{
+      url: String, // Cloudinary URL
+      uploadedAt: { type: Date, default: Date.now },
+      uploadedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
+      uploadedByRole: String, // CUSTOMER | SALES | ADMIN | ENGINEER
+      originalName: String,
+      mimeType: String,
+      size: Number,
+    }],
   },
   statusHistory: [{
     status: String,

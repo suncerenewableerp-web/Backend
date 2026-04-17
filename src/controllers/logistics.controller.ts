@@ -370,3 +370,98 @@ export const scheduleDispatch = asyncHandler(async (req: any, res: any) => {
 
   res.status(201).json({ success: true, data: logistics });
 });
+
+// @desc    List tickets pending Admin dispatch approval
+// @route   GET /api/logistics/pending-dispatch-approvals
+export const getPendingDispatchApprovals = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const rows: any[] = await Logistics.find({
+    type: "DELIVERY",
+    "billing.dispatchApprovalRequestedAt": { $exists: true, $ne: null },
+    $or: [{ "billing.dispatchApproved": { $exists: false } }, { "billing.dispatchApproved": false }],
+  })
+    .populate("ticket", "ticketId status customer createdAt")
+    .sort({ "billing.dispatchApprovalRequestedAt": -1, updatedAt: -1 })
+    .limit(500);
+
+  const pending = (rows || [])
+    .map((r: any) => {
+      const t = r?.ticket && typeof r.ticket === "object" ? r.ticket : null;
+      if (!t || String(t.status || "").toUpperCase() === "CLOSED") return null;
+
+      const custName = t?.customer?.name ? String(t.customer.name).trim() : "";
+      const custCompany = t?.customer?.company ? String(t.customer.company).trim() : "";
+      const customer = custName && custCompany ? `${custName} / ${custCompany}` : custName || custCompany || "—";
+
+      return {
+        ticketDbId: String(t?._id || ""),
+        ticketId: String(t?.ticketId || ""),
+        status: String(t?.status || ""),
+        customer,
+        requestedAt: r?.billing?.dispatchApprovalRequestedAt || null,
+        invoiceGenerated: Boolean(r?.billing?.invoiceGenerated),
+        paymentDone: Boolean(r?.billing?.paymentDone),
+      };
+    })
+    .filter(Boolean);
+
+  res.json({
+    success: true,
+    data: {
+      count: pending.length,
+      tickets: pending,
+    },
+  });
+});
+
+// @desc    List tickets approved by Admin for dispatch (Sales view)
+// @route   GET /api/logistics/approved-dispatch-approvals
+export const getApprovedDispatchApprovals = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "SALES") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const rows: any[] = await Logistics.find({
+    type: "DELIVERY",
+    "billing.dispatchApproved": true,
+  })
+    .populate("ticket", "ticketId status customer createdAt")
+    .sort({ "billing.dispatchApprovedAt": -1, updatedAt: -1 })
+    .limit(500);
+
+  const approved = (rows || [])
+    .map((r: any) => {
+      const t = r?.ticket && typeof r.ticket === "object" ? r.ticket : null;
+      if (!t || String(t.status || "").toUpperCase() === "CLOSED") return null;
+      // Only show approvals that are still actionable by Sales.
+      if (String(t.status || "").toUpperCase() !== "UNDER_DISPATCH") return null;
+
+      const custName = t?.customer?.name ? String(t.customer.name).trim() : "";
+      const custCompany = t?.customer?.company ? String(t.customer.company).trim() : "";
+      const customer = custName && custCompany ? `${custName} / ${custCompany}` : custName || custCompany || "—";
+
+      return {
+        ticketDbId: String(t?._id || ""),
+        ticketId: String(t?.ticketId || ""),
+        status: String(t?.status || ""),
+        customer,
+        approvedAt: r?.billing?.dispatchApprovedAt || null,
+        invoiceGenerated: Boolean(r?.billing?.invoiceGenerated),
+        paymentDone: Boolean(r?.billing?.paymentDone),
+      };
+    })
+    .filter(Boolean);
+
+  res.json({
+    success: true,
+    data: {
+      count: approved.length,
+      tickets: approved,
+    },
+  });
+});

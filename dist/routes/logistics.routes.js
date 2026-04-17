@@ -15,6 +15,8 @@ router.post('/schedule-pickup', (0, auth_middleware_1.authorize)('logistics', 'e
 router.post('/under-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.saveUnderDispatch));
 router.post('/approve-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.approveDispatch));
 router.post('/schedule-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.scheduleDispatch));
+router.get('/pending-dispatch-approvals', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.getPendingDispatchApprovals));
+router.get('/approved-dispatch-approvals', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.getApprovedDispatchApprovals));
 router.put('/:id', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.updateTracking));
 router.get('/ticket/:ticketId', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.getLogisticsByTicket));
 exports.default = router;

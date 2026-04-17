@@ -3,7 +3,10 @@ import { verifyToken, authorize } from "../middleware/auth.middleware";
 import { asyncHandler } from "../middleware/error.middleware";
 import {
   addInverterBrand,
+  addJobCardEngineerName,
+  deleteJobCardEngineerName,
   getSlaSettings,
+  listJobCardEngineerNames,
   listInverterBrands,
   updateSlaSettings,
 } from "../controllers/settings.controller";
@@ -17,5 +20,9 @@ router.put('/sla', authorize('sla', 'edit'), asyncHandler(updateSlaSettings));
 
 router.get('/inverter-brands', authorize('tickets', 'view'), asyncHandler(listInverterBrands));
 router.post('/inverter-brands', authorize('tickets', 'edit'), asyncHandler(addInverterBrand));
+
+router.get('/jobcard-engineers', authorize('tickets', 'view'), asyncHandler(listJobCardEngineerNames));
+router.post('/jobcard-engineers', authorize('tickets', 'edit'), asyncHandler(addJobCardEngineerName));
+router.delete('/jobcard-engineers/:key', authorize('tickets', 'edit'), asyncHandler(deleteJobCardEngineerName));
 
 export default router;

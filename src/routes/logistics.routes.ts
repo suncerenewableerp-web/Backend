@@ -9,6 +9,8 @@ import {
   approveDispatch,
   scheduleDispatch,
   getLogisticsByTicket,
+  getPendingDispatchApprovals,
+  getApprovedDispatchApprovals,
 } from "../controllers/logistics.controller";
 import { asyncHandler } from "../middleware/error.middleware";
 
@@ -22,6 +24,8 @@ router.post('/schedule-pickup', authorize('logistics', 'edit'), asyncHandler(sch
 router.post('/under-dispatch', authorize('logistics', 'edit'), asyncHandler(saveUnderDispatch));
 router.post('/approve-dispatch', authorize('logistics', 'edit'), asyncHandler(approveDispatch));
 router.post('/schedule-dispatch', authorize('logistics', 'edit'), asyncHandler(scheduleDispatch));
+router.get('/pending-dispatch-approvals', authorize('logistics', 'view'), asyncHandler(getPendingDispatchApprovals));
+router.get('/approved-dispatch-approvals', authorize('logistics', 'view'), asyncHandler(getApprovedDispatchApprovals));
 router.put('/:id', authorize('logistics', 'edit'), asyncHandler(updateTracking));
 router.get('/ticket/:ticketId', authorize('logistics', 'view'), asyncHandler(getLogisticsByTicket));
 

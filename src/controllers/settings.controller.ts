@@ -1,5 +1,6 @@
 import SlaSettings from "../models/SlaSettings.model";
 import InverterBrand from "../models/InverterBrand.model";
+import JobCardEngineerName from "../models/JobCardEngineerName.model";
 import { asyncHandler } from "../middleware/error.middleware";
 
 const DEFAULT_INVERTER_BRANDS = [
@@ -59,6 +60,15 @@ function normalizeBrandName(input: any) {
   const raw = String(input || "").trim();
   if (!raw) return null;
   // Collapse whitespace and normalize.
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  const key = name.toLowerCase();
+  return { name, key };
+}
+
+function normalizeJobCardEngineerName(input: any) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
   const name = raw.replace(/\s+/g, " ").trim();
   if (!name) return null;
   const key = name.toLowerCase();
@@ -152,4 +162,58 @@ export const addInverterBrand = asyncHandler(async (req: any, res: any) => {
   ).lean();
 
   res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+
+// @desc    List jobcard engineer/sub-engineer names (dropdown)
+// @route   GET /api/settings/jobcard-engineers
+export const listJobCardEngineerNames = asyncHandler(async (req: any, res: any) => {
+  const rows = await JobCardEngineerName.find({}).select("name").sort({ name: 1 }).lean();
+  const names = (rows || []).map((r: any) => String(r?.name || "").trim()).filter(Boolean);
+  res.json({ success: true, data: names });
+});
+
+// @desc    Add a jobcard engineer/sub-engineer name (admin)
+// @route   POST /api/settings/jobcard-engineers
+export const addJobCardEngineerName = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeJobCardEngineerName(req.body?.name);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Name is required" });
+  }
+  if (parsed.name.length > 80) {
+    return res.status(400).json({ success: false, message: "Name too long" });
+  }
+
+  const doc = await JobCardEngineerName.findOneAndUpdate(
+    { key: parsed.key },
+    { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+
+// @desc    Delete a jobcard engineer/sub-engineer name (admin)
+// @route   DELETE /api/settings/jobcard-engineers/:key
+export const deleteJobCardEngineerName = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeJobCardEngineerName(req.params?.key);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Name key is required" });
+  }
+
+  const deleted = await JobCardEngineerName.findOneAndDelete({ key: parsed.key }).lean();
+  if (!deleted) {
+    return res.status(404).json({ success: false, message: "Name not found" });
+  }
+
+  res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
 });

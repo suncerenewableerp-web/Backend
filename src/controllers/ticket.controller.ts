@@ -23,6 +23,87 @@ const DEFAULT_FINAL_TESTING_ACTIVITIES = [
   { sr: 11, activity: 'Cleaning of inverter body', result: '' },
 ];
 
+const AUTO_WARRANTY_SERIAL_PREFIXES = ["SQ050K1411960456"];
+const ASSUMED_DISPATCH_LAG_DAYS = 7; // UNDER_DISPATCH → DISPATCHED assumed
+// Requirement: warranty end = dispatch date + (6 months + 1 week).
+// The system already treats "6 months" as 180 days elsewhere, so we keep it consistent.
+const WARRANTY_AFTER_DISPATCH_DAYS = 187; // 180 + 7
+
+function addDays(d: Date, days: number) {
+  return new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getAutoWarrantyPrefix(serialNo: any): string | null {
+  const raw = String(serialNo || "").trim().toUpperCase();
+  if (!raw) return null;
+  const hit = AUTO_WARRANTY_SERIAL_PREFIXES.find((p) => raw.startsWith(String(p).toUpperCase()));
+  return hit || null;
+}
+
+function latestStatusChangedAt(statusHistory: any[] | undefined, status: string): Date | null {
+  const target = String(status || "").toUpperCase();
+  const rows = Array.isArray(statusHistory) ? statusHistory : [];
+  let best: Date | null = null;
+  for (const r of rows) {
+    const s = String(r?.status || "").toUpperCase();
+    if (s !== target) continue;
+    const d = r?.changedAt ? new Date(r.changedAt) : null;
+    if (!d || Number.isNaN(d.getTime())) continue;
+    if (!best || d.getTime() > best.getTime()) best = d;
+  }
+  return best;
+}
+
+async function computeAutoWarrantyEnd(prefix: string): Promise<Date | null> {
+  const p = String(prefix || "").trim();
+  if (!p) return null;
+
+  const prev: any = await Ticket.findOne({
+    status: { $in: ["UNDER_DISPATCH", "DISPATCHED", "INSTALLATION_DONE", "CLOSED"] },
+    "inverter.serialNo": { $regex: `^${escapeRegExp(p)}`, $options: "i" },
+  })
+    .select("_id inverter.warrantyEnd statusHistory updatedAt createdAt")
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .lean();
+
+  if (!prev?._id) return null;
+
+  const existing = prev?.inverter?.warrantyEnd ? new Date(prev.inverter.warrantyEnd) : null;
+  if (existing && !Number.isNaN(existing.getTime())) return existing;
+
+  // Prefer explicit dispatch scheduling date if present.
+  const prevLog: any = await Logistics.findOne({ ticket: prev._id, type: "DELIVERY" })
+    .select("pickupDetails.scheduledDate deliveryDetails.deliveredDate updatedAt createdAt")
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .lean();
+  const scheduledDispatchAt = prevLog?.pickupDetails?.scheduledDate
+    ? new Date(prevLog.pickupDetails.scheduledDate)
+    : null;
+  if (scheduledDispatchAt && !Number.isNaN(scheduledDispatchAt.getTime())) {
+    return addDays(scheduledDispatchAt, WARRANTY_AFTER_DISPATCH_DAYS);
+  }
+
+  const dispatchedAt = latestStatusChangedAt(prev?.statusHistory, "DISPATCHED");
+  const underDispatchAt = latestStatusChangedAt(prev?.statusHistory, "UNDER_DISPATCH");
+
+  const assumedDispatchAt = dispatchedAt
+    ? dispatchedAt
+    : underDispatchAt
+      ? addDays(underDispatchAt, ASSUMED_DISPATCH_LAG_DAYS)
+      : prev?.updatedAt
+        ? new Date(prev.updatedAt)
+        : prev?.createdAt
+          ? new Date(prev.createdAt)
+          : null;
+
+  if (!assumedDispatchAt || Number.isNaN(assumedDispatchAt.getTime())) return null;
+  return addDays(assumedDispatchAt, WARRANTY_AFTER_DISPATCH_DAYS);
+}
+
 // @desc    Get all tickets
 // @route   GET /api/tickets
 export const getTickets = asyncHandler(async (req: any, res: any) => {
@@ -51,8 +132,10 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
       new Set((finalizedRows || []).map((r: any) => String(r?.ticket || "")).filter(Boolean)),
     );
 
-    const visibilityOr: any[] = [{ status: "UNDER_REPAIRED" }];
+    // NOTE: On-site (offline booking) tickets must be visible only to the assigned engineer.
+    const visibilityOr: any[] = [{ status: "UNDER_REPAIRED", serviceType: { $ne: "ONSITE" } }];
     if (finalizedTicketIds.length) visibilityOr.push({ _id: { $in: finalizedTicketIds } });
+    visibilityOr.push({ assignedTo: req.user._id });
     const existingSearchOr = query.$or;
     delete query.$or;
     query.$and = [
@@ -112,7 +195,13 @@ function ticketScopeQuery(user) {
   if (roleName === 'ENGINEER') {
     // Engineers can always work on the repair stage, and can also access tickets explicitly
     // assigned to them in later stages (dispatch/installation).
-    return { $or: [{ status: "UNDER_REPAIRED" }, { assignedTo: user._id }] };
+    // NOTE: On-site (offline booking) tickets must be visible only to the assigned engineer.
+    return {
+      $or: [
+        { status: "UNDER_REPAIRED", serviceType: { $ne: "ONSITE" } },
+        { assignedTo: user._id },
+      ],
+    };
   }
   if (roleName === 'CUSTOMER') {
     const legacyMatch: Record<string, any> =
@@ -204,6 +293,37 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
   const roleName = String(req.user?.role?.name || "").toUpperCase();
   const body = { ...(req.body || {}) };
 
+  if (Object.prototype.hasOwnProperty.call(body, "serviceType")) {
+    const st = String(body.serviceType || "").trim().toUpperCase();
+    if (st === "STANDARD" || st === "ONSITE") body.serviceType = st;
+    else delete body.serviceType;
+  }
+
+  // Customers must never be able to set/override warranty validity via payload.
+  if (roleName === "CUSTOMER") {
+    if (body?.inverter && typeof body.inverter === "object") {
+      if (Object.prototype.hasOwnProperty.call(body.inverter, "warrantyEnd")) {
+        delete body.inverter.warrantyEnd;
+      }
+    }
+  }
+
+  const autoPrefix = getAutoWarrantyPrefix(body?.inverter?.serialNo);
+  if (autoPrefix) {
+    const hasWarrantyEnd =
+      body?.inverter &&
+      typeof body.inverter === "object" &&
+      Object.prototype.hasOwnProperty.call(body.inverter, "warrantyEnd") &&
+      body.inverter.warrantyEnd;
+
+    if (!hasWarrantyEnd) {
+      const computed = await computeAutoWarrantyEnd(autoPrefix);
+      const fallback = addDays(new Date(), ASSUMED_DISPATCH_LAG_DAYS + WARRANTY_AFTER_DISPATCH_DAYS);
+      body.inverter = body.inverter && typeof body.inverter === "object" ? body.inverter : {};
+      body.inverter.warrantyEnd = computed || fallback;
+    }
+  }
+
   // If a customer raises a ticket, bind it to their identity so they can
   // consistently see it later (and can't spoof another customer).
   if (roleName === 'CUSTOMER') {
@@ -261,6 +381,14 @@ export const createTicketsBulk = asyncHandler(async (req: any, res: any) => {
     return res.status(400).json({ success: false, message: "Each ticket must be an object" });
   }
 
+  for (const body of bodies) {
+    if (Object.prototype.hasOwnProperty.call(body, "serviceType")) {
+      const st = String(body.serviceType || "").trim().toUpperCase();
+      if (st === "STANDARD" || st === "ONSITE") body.serviceType = st;
+      else delete body.serviceType;
+    }
+  }
+
   const ticketIds = bodies.map((b) => String(b.ticketId || "").trim());
   const missingTicketId = ticketIds.findIndex((id) => !id);
   if (missingTicketId !== -1) {
@@ -294,6 +422,12 @@ export const createTicketsBulk = asyncHandler(async (req: any, res: any) => {
   // consistently see it later (and can't spoof another customer).
   if (roleName === "CUSTOMER") {
     for (const body of bodies) {
+      if (body?.inverter && typeof body.inverter === "object") {
+        if (Object.prototype.hasOwnProperty.call(body.inverter, "warrantyEnd")) {
+          delete body.inverter.warrantyEnd;
+        }
+      }
+
       const inputCustomer =
         typeof body.customer === "object" && body.customer ? body.customer : {};
       body.customer = {
@@ -304,6 +438,29 @@ export const createTicketsBulk = asyncHandler(async (req: any, res: any) => {
         ...(inputCustomer?.phone ? {} : req.user.phone ? { phone: req.user.phone } : {}),
       };
     }
+  }
+
+  const computedWarrantyByPrefix = new Map<string, Date>();
+  for (const body of bodies) {
+    const prefix = getAutoWarrantyPrefix(body?.inverter?.serialNo);
+    if (!prefix) continue;
+
+    const hasWarrantyEnd =
+      body?.inverter &&
+      typeof body.inverter === "object" &&
+      Object.prototype.hasOwnProperty.call(body.inverter, "warrantyEnd") &&
+      body.inverter.warrantyEnd;
+    if (hasWarrantyEnd) continue;
+
+    let end = computedWarrantyByPrefix.get(prefix);
+    if (!end) {
+      const computed = await computeAutoWarrantyEnd(prefix);
+      end = computed || addDays(new Date(), ASSUMED_DISPATCH_LAG_DAYS + WARRANTY_AFTER_DISPATCH_DAYS);
+      computedWarrantyByPrefix.set(prefix, end);
+    }
+
+    body.inverter = body.inverter && typeof body.inverter === "object" ? body.inverter : {};
+    body.inverter.warrantyEnd = end;
   }
 
   const payload = bodies.map((body) => ({
@@ -421,58 +578,85 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
 
   const prevStatus = ticket.status;
   const prevFlow = normalizeFlowStatus(prevStatus);
+  const isOnsite = String((ticket as any)?.serviceType || "").toUpperCase() === "ONSITE";
 
   if (Object.prototype.hasOwnProperty.call(body, 'status')) {
     const nextFlow = normalizeFlowStatus(body.status);
-    const prevIdx = STATUS_FLOW.indexOf(prevFlow);
-    const nextIdx = STATUS_FLOW.indexOf(nextFlow);
-
-    // Business rule: Sales can proceed to DISPATCHED only after Admin approval.
-    if (roleNorm === "SALES" && nextFlow === "DISPATCHED") {
-      const delivery: any = await Logistics.findOne({ ticket: ticket._id, type: "DELIVERY" })
-        .select("billing.dispatchApproved")
-        .lean();
-      const approved = Boolean(delivery?.billing?.dispatchApproved);
-      if (!approved) {
-        return res.status(403).json({
-          success: false,
-          message: "Dispatch requires Admin approval. Please wait for Admin to approve the dispatch request.",
-        });
-      }
-    }
-
-    if (prevFlow === 'CLOSED' && nextFlow !== 'CLOSED') {
-      return res.status(400).json({ success: false, message: 'Closed tickets cannot be reopened.' });
-    }
-    if (nextIdx < prevIdx) {
-      return res.status(400).json({ success: false, message: 'Status cannot move backwards.' });
-    }
-    if (nextIdx > prevIdx + 1) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please follow the workflow step-by-step. Skipping steps is not allowed.',
-      });
-    }
-
-    // Installation step requires at least one installation PDF to be uploaded first.
-    if (nextFlow === "INSTALLATION_DONE") {
-      const docsCount = getInstallationDocs(ticket).length;
-      if (!docsCount) {
+    if (isOnsite) {
+      const allowed = new Set(["CREATED", "UNDER_REPAIRED", "CLOSED"]);
+      if (!allowed.has(nextFlow)) {
         return res.status(400).json({
           success: false,
-          message: "Please upload installation PDF first, then mark installation as done.",
+          message: "Invalid status for on-site (offline booking) tickets.",
         });
       }
-    }
-
-    // Closing is allowed only after installation docs are present.
-    if (nextFlow === "CLOSED") {
-      const docsCount = getInstallationDocs(ticket).length;
-      if (!docsCount) {
+      if (prevFlow === "CLOSED" && nextFlow !== "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets cannot be reopened." });
+      }
+      const order = ["CREATED", "UNDER_REPAIRED", "CLOSED"];
+      const prevOrder = order.indexOf(prevFlow);
+      const nextOrder = order.indexOf(nextFlow);
+      if (nextOrder < prevOrder) {
+        return res.status(400).json({ success: false, message: "Status cannot move backwards." });
+      }
+      if (prevFlow === "CREATED" && nextFlow === "CLOSED") {
         return res.status(400).json({
           success: false,
-          message: "Please upload installation PDF before closing the ticket.",
+          message: "Please assign to engineer before closing this offline booking.",
         });
+      }
+      // On-site tickets intentionally bypass pickup/transit/installation steps and don't require installation docs.
+    } else {
+      const prevIdx = STATUS_FLOW.indexOf(prevFlow);
+      const nextIdx = STATUS_FLOW.indexOf(nextFlow);
+
+      // Business rule: Sales can proceed to DISPATCHED only after Admin approval.
+      if (roleNorm === "SALES" && nextFlow === "DISPATCHED") {
+        const delivery: any = await Logistics.findOne({ ticket: ticket._id, type: "DELIVERY" })
+          .select("billing.dispatchApproved")
+          .lean();
+        const approved = Boolean(delivery?.billing?.dispatchApproved);
+        if (!approved) {
+          return res.status(403).json({
+            success: false,
+            message: "Dispatch requires Admin approval. Please wait for Admin to approve the dispatch request.",
+          });
+        }
+      }
+
+      if (prevFlow === 'CLOSED' && nextFlow !== 'CLOSED') {
+        return res.status(400).json({ success: false, message: 'Closed tickets cannot be reopened.' });
+      }
+      if (nextIdx < prevIdx) {
+        return res.status(400).json({ success: false, message: 'Status cannot move backwards.' });
+      }
+      if (nextIdx > prevIdx + 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please follow the workflow step-by-step. Skipping steps is not allowed.',
+        });
+      }
+
+      // Installation step requires at least one installation PDF to be uploaded first.
+      if (nextFlow === "INSTALLATION_DONE") {
+        const docsCount = getInstallationDocs(ticket).length;
+        if (!docsCount) {
+          return res.status(400).json({
+            success: false,
+            message: "Please upload installation PDF first, then mark installation as done.",
+          });
+        }
+      }
+
+      // Closing is allowed only after installation docs are present.
+      if (nextFlow === "CLOSED") {
+        const docsCount = getInstallationDocs(ticket).length;
+        if (!docsCount) {
+          return res.status(400).json({
+            success: false,
+            message: "Please upload installation PDF before closing the ticket.",
+          });
+        }
       }
     }
   }
@@ -538,6 +722,144 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   await ticket.populate('statusHistory.changedBy', 'name');
   await ticket.populate('logistics');
   res.json({ success: true, data: ticket });
+});
+
+// @desc    Assign engineer to on-site (offline booking) ticket
+// @route   POST /api/tickets/:id/onsite/assign
+export const assignOnsiteBooking = asyncHandler(async (req: any, res: any) => {
+  const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+  if (roleNorm !== "ADMIN" && roleNorm !== "SALES") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const ticket = await Ticket.findById(req.params.id)
+    .populate("createdBy", "email name phone")
+    .populate("assignedTo", "name")
+    .populate("statusHistory.changedBy", "name")
+    .populate("logistics");
+  if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
+
+  const isOnsite = String((ticket as any)?.serviceType || "").toUpperCase() === "ONSITE";
+  if (!isOnsite) {
+    return res.status(400).json({ success: false, message: "This ticket is not an on-site (offline booking) ticket." });
+  }
+  if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+    return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+  }
+
+  const bodyEngineerId = String(req.body?.engineerId || "").trim();
+  const envDefaultEngineerId = String(process.env.ONSITE_DEFAULT_ENGINEER_ID || process.env.DEFAULT_ENGINEER_ID || "").trim();
+  const envDefaultEngineerEmail = String(
+    process.env.ONSITE_DEFAULT_ENGINEER_EMAIL || process.env.DEFAULT_ENGINEER_EMAIL || "",
+  )
+    .trim()
+    .toLowerCase();
+
+  const findFirstEngineer = async (preferredEmail?: string) => {
+    const engineerRole = await Role.findOne({ name: "ENGINEER" }).select("_id").lean();
+    if (!engineerRole?._id) return null;
+    const baseQuery: any = { role: engineerRole._id, isActive: true };
+    if (preferredEmail) baseQuery.email = preferredEmail;
+    let u = await User.findOne(baseQuery).sort({ createdAt: 1 }).select("_id").lean();
+    if (!u && preferredEmail) {
+      u = await User.findOne({ role: engineerRole._id, isActive: true })
+        .sort({ createdAt: 1 })
+        .select("_id")
+        .lean();
+    }
+    return u;
+  };
+
+  const ensureEngineerUserId = async (candidateId: string | null | undefined) => {
+    const id = String(candidateId || "").trim();
+    if (!id) return null;
+    const u: any = await User.findById(id).populate("role", "name");
+    const roleName = String(u?.role?.name || "").toUpperCase();
+    if (!u?._id || !u?.isActive || roleName !== "ENGINEER") return null;
+    return String(u._id);
+  };
+
+  let engineerId =
+    (await ensureEngineerUserId(bodyEngineerId)) ||
+    (await ensureEngineerUserId(envDefaultEngineerId)) ||
+    (await (async () => {
+      const u = await findFirstEngineer(envDefaultEngineerEmail || undefined);
+      return u?._id ? String(u._id) : null;
+    })());
+
+  if (!engineerId) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "No engineer user found to assign. Create an active ENGINEER user, or set ONSITE_DEFAULT_ENGINEER_ID.",
+    });
+  }
+
+  const prevStatus = String(ticket.status || "").toUpperCase();
+  ticket.set("assignedTo", [engineerId]);
+  ticket.set("status", "UNDER_REPAIRED");
+  if (prevStatus !== "UNDER_REPAIRED") {
+    ticket.statusHistory.push({ status: "UNDER_REPAIRED", changedBy: req.user._id });
+  }
+
+  await ticket.save();
+  await ticket.populate("assignedTo", "name");
+  res.status(200).json({ success: true, data: ticket });
+});
+
+// @desc    Save on-site (offline booking) engineer job details and optionally close ticket
+// @route   PUT /api/tickets/:id/onsite/jobcard
+export const upsertOnsiteJobCard = asyncHandler(async (req: any, res: any) => {
+  const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+  if (roleNorm !== "ENGINEER") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const ticket = await Ticket.findOne({ _id: req.params.id, assignedTo: req.user._id })
+    .populate("createdBy", "email name phone")
+    .populate("assignedTo", "name")
+    .populate("statusHistory.changedBy", "name")
+    .populate("logistics");
+  if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
+
+  const isOnsite = String((ticket as any)?.serviceType || "").toUpperCase() === "ONSITE";
+  if (!isOnsite) {
+    return res.status(400).json({ success: false, message: "This ticket is not an on-site (offline booking) ticket." });
+  }
+
+  if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+    return res.status(400).json({ success: false, message: "This ticket is already closed." });
+  }
+  if (String(ticket.status || "").toUpperCase() !== "UNDER_REPAIRED") {
+    return res.status(400).json({ success: false, message: "Please ask Sales/Admin to assign this offline booking first." });
+  }
+
+  const visitDate = Object.prototype.hasOwnProperty.call(req.body || {}, "visitDate")
+    ? toDateOrNull(req.body?.visitDate)
+    : null;
+  const engineerName = Object.prototype.hasOwnProperty.call(req.body || {}, "engineerName")
+    ? String(req.body?.engineerName || "").trim()
+    : "";
+  const remark = Object.prototype.hasOwnProperty.call(req.body || {}, "remark")
+    ? String(req.body?.remark || "").trim()
+    : null;
+  const markRepaired = Boolean(req.body?.markRepaired);
+
+  (ticket as any).onsite = (ticket as any).onsite || {};
+  (ticket as any).onsite.engineerName =
+    engineerName || String(req.user?.name || "").trim() || (ticket as any).onsite.engineerName;
+  if (visitDate) (ticket as any).onsite.visitDate = visitDate;
+  if (remark !== null) (ticket as any).onsite.remark = remark;
+
+  if (markRepaired) {
+    (ticket as any).onsite.markedRepairedAt = new Date();
+    (ticket as any).onsite.markedRepairedBy = req.user?._id;
+    ticket.status = "CLOSED";
+    ticket.statusHistory.push({ status: "CLOSED", changedBy: req.user._id });
+  }
+
+  await ticket.save();
+  res.status(200).json({ success: true, data: ticket });
 });
 
 // @desc    Approve installation (moves ticket DISPATCHED -> INSTALLATION_DONE)

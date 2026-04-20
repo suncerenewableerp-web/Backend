@@ -10,6 +10,11 @@ const ticketSchema = new mongoose_1.default.Schema({
         unique: true,
         required: true
     },
+    serviceType: {
+        type: String,
+        enum: ["STANDARD", "ONSITE"],
+        default: "STANDARD",
+    },
     createdBy: { type: mongoose_1.default.Schema.ObjectId, ref: 'User' },
     customer: {
         name: String,
@@ -30,6 +35,13 @@ const ticketSchema = new mongoose_1.default.Schema({
         capacity: String,
         installationDate: Date,
         warrantyEnd: Date
+    },
+    onsite: {
+        engineerName: String,
+        visitDate: Date,
+        remark: String,
+        markedRepairedAt: Date,
+        markedRepairedBy: { type: mongoose_1.default.Schema.ObjectId, ref: "User" },
     },
     issue: {
         description: String,
@@ -102,4 +114,5 @@ ticketSchema.index({ ticketId: 1 });
 ticketSchema.index({ 'customer.phone': 1 });
 ticketSchema.index({ createdBy: 1 });
 ticketSchema.index({ slaStatus: 1 });
+ticketSchema.index({ serviceType: 1, status: 1 });
 exports.default = mongoose_1.default.model("Ticket", ticketSchema);

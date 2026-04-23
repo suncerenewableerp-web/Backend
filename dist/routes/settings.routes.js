@@ -13,6 +13,7 @@ router.get('/sla', (0, auth_middleware_1.authorize)('sla', 'view'), (0, error_mi
 router.put('/sla', (0, auth_middleware_1.authorize)('sla', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.updateSlaSettings));
 router.get('/inverter-brands', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listInverterBrands));
 router.post('/inverter-brands', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addInverterBrand));
+router.delete('/inverter-brands/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteInverterBrand));
 router.get('/jobcard-engineers', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listJobCardEngineerNames));
 router.post('/jobcard-engineers', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addJobCardEngineerName));
 router.delete('/jobcard-engineers/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteJobCardEngineerName));

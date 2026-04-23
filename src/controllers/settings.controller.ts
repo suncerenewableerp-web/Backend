@@ -147,6 +147,11 @@ export const listInverterBrands = asyncHandler(async (req: any, res: any) => {
 // @desc    Add inverter brand to dropdown list
 // @route   POST /api/settings/inverter-brands
 export const addInverterBrand = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
   const parsed = normalizeBrandName(req.body?.name);
   if (!parsed) {
     return res.status(400).json({ success: false, message: "Brand name is required" });
@@ -162,6 +167,27 @@ export const addInverterBrand = asyncHandler(async (req: any, res: any) => {
   ).lean();
 
   res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+
+// @desc    Delete inverter brand from dropdown list (admin)
+// @route   DELETE /api/settings/inverter-brands/:key
+export const deleteInverterBrand = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeBrandName(req.params?.key);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Brand key is required" });
+  }
+
+  const deleted = await InverterBrand.findOneAndDelete({ key: parsed.key }).lean();
+  if (!deleted) {
+    return res.status(404).json({ success: false, message: "Brand not found" });
+  }
+
+  res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
 });
 
 // @desc    List jobcard engineer/sub-engineer names (dropdown)

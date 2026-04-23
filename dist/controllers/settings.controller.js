@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
+exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
 const SlaSettings_model_1 = __importDefault(require("../models/SlaSettings.model"));
 const InverterBrand_model_1 = __importDefault(require("../models/InverterBrand.model"));
 const JobCardEngineerName_model_1 = __importDefault(require("../models/JobCardEngineerName.model"));
@@ -146,6 +146,10 @@ exports.listInverterBrands = (0, error_middleware_1.asyncHandler)(async (req, re
 // @desc    Add inverter brand to dropdown list
 // @route   POST /api/settings/inverter-brands
 exports.addInverterBrand = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
     const parsed = normalizeBrandName(req.body?.name);
     if (!parsed) {
         return res.status(400).json({ success: false, message: "Brand name is required" });
@@ -155,6 +159,23 @@ exports.addInverterBrand = (0, error_middleware_1.asyncHandler)(async (req, res)
     }
     const doc = await InverterBrand_model_1.default.findOneAndUpdate({ key: parsed.key }, { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }).lean();
     res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+// @desc    Delete inverter brand from dropdown list (admin)
+// @route   DELETE /api/settings/inverter-brands/:key
+exports.deleteInverterBrand = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeBrandName(req.params?.key);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Brand key is required" });
+    }
+    const deleted = await InverterBrand_model_1.default.findOneAndDelete({ key: parsed.key }).lean();
+    if (!deleted) {
+        return res.status(404).json({ success: false, message: "Brand not found" });
+    }
+    res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
 });
 // @desc    List jobcard engineer/sub-engineer names (dropdown)
 // @route   GET /api/settings/jobcard-engineers

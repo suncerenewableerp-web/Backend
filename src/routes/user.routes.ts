@@ -7,6 +7,7 @@ import {
   getEngineers,
   resetUserPassword,
   setUserPassword,
+  updateUserRole,
 } from "../controllers/user.controller";
 import { asyncHandler } from "../middleware/error.middleware";
 
@@ -18,6 +19,7 @@ router.get('/', authorize("users", "view"), asyncHandler(getUsers));
 router.post('/', authorize("users", "create"), asyncHandler(createUser));
 router.put('/:id/password', authorize("users", "edit"), asyncHandler(setUserPassword));
 router.post('/:id/password/reset', authorize("users", "edit"), asyncHandler(resetUserPassword));
+router.put("/:id/role", authorize("users", "edit"), asyncHandler(updateUserRole));
 
 router.get('/engineer-names', asyncHandler(getEngineerNames));
 router.get('/engineers', authorize("users", "view"), asyncHandler(getEngineers));

@@ -170,6 +170,56 @@ export const resetUserPassword = asyncHandler(async (req: any, res: any) => {
   res.json({ success: true, message: "Password reset" });
 });
 
+// @desc    Update a user's role (admin only)
+// @route   PUT /api/users/:id/role
+export const updateUserRole = asyncHandler(async (req: any, res: any) => {
+  const actorRole = String(req.user?.role?.name || "").trim().toUpperCase();
+  if (actorRole !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const userId = String(req.params.id || "").trim();
+  const roleNorm = String(req.body?.role || "").trim().toUpperCase();
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: "User id is required" });
+  }
+  if (!roleNorm) {
+    return res.status(400).json({ success: false, message: "Role is required" });
+  }
+
+  const roleDoc: any = await Role.findOne({ name: roleNorm }).select("_id name").lean();
+  if (!roleDoc?._id) {
+    return res.status(400).json({ success: false, message: "Invalid role" });
+  }
+
+  const user: any = await User.findById(userId).populate("role", "name");
+  if (!user) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  const currentRole = String(user?.role?.name || "").trim().toUpperCase();
+  if (currentRole === "ADMIN" && roleNorm !== "ADMIN") {
+    const adminRole: any = await Role.findOne({ name: "ADMIN" }).select("_id").lean();
+    const adminCount = adminRole?._id
+      ? await User.countDocuments({ role: adminRole._id, isActive: true })
+      : 0;
+    if (adminCount <= 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot change role: at least one ADMIN is required.",
+      });
+    }
+  }
+
+  user.role = roleDoc._id;
+  await user.save();
+  await user.populate("role", "name");
+  user.password = undefined;
+
+  res.json({ success: true, data: { user } });
+});
+
 // @desc    Get engineers
 // @route   GET /api/users/engineers
 export const getEngineers = asyncHandler(async (req: any, res: any) => {

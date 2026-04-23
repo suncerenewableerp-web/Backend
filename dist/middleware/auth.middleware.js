@@ -39,7 +39,7 @@ exports.verifyToken = (0, error_middleware_1.asyncHandler)(async (req, res, next
 const authorize = (module, action) => {
     return (0, error_middleware_1.asyncHandler)(async (req, res, next) => {
         const role = req.user?.role;
-        const roleName = String(role?.name || "").toUpperCase();
+        const roleName = String(role?.name || "").trim().toUpperCase();
         // Business rule: SALES should have ADMIN-like access for tickets and logistics
         // (except delete), so they can schedule pickup/dispatch and manage ticket flow.
         if (roleName === "SALES") {

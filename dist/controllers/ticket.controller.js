@@ -119,7 +119,7 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             ] })
     };
     // Role-scoped visibility
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     if (roleName === 'ENGINEER') {
         // Engineers should only receive work when Sales/Admin moves it to UNDER_REPAIRED.
         const finalizedRows = await JobCard_model_1.default.find({ engineerFinalizedBy: req.user._id })
@@ -139,17 +139,28 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         ];
     }
     if (roleName === 'CUSTOMER') {
-        // Only show tickets raised by this customer.
-        // Prefer the explicit `createdBy` link, but keep a safe fallback for legacy rows
-        // that predate the field.
-        const legacyMatch = req.user?.phone
-            ? { 'customer.phone': req.user.phone }
-            : { 'customer.name': req.user.name };
-        const visibilityOr = [
-            { createdBy: req.user._id },
-            { createdBy: { $exists: false }, ...legacyMatch },
-            { createdBy: null, ...legacyMatch },
-        ];
+        // Only show tickets belonging to this customer.
+        // Prefer explicit `createdBy`, but also allow matching by the embedded customer identity
+        // so staff-created tickets remain visible to the customer.
+        const email = req.user?.email ? String(req.user.email).trim().toLowerCase() : "";
+        const phone = req.user?.phone ? String(req.user.phone).trim() : "";
+        const name = req.user?.name ? String(req.user.name).trim() : "";
+        const legacyMatch = phone
+            ? { "customer.phone": phone }
+            : name
+                ? { "customer.name": name }
+                : null;
+        const visibilityOr = [{ createdBy: req.user._id }];
+        if (email)
+            visibilityOr.push({ "customer.email": email });
+        if (phone)
+            visibilityOr.push({ "customer.phone": phone });
+        if (!email && !phone && name)
+            visibilityOr.push({ "customer.name": name });
+        if (legacyMatch) {
+            visibilityOr.push({ createdBy: { $exists: false }, ...legacyMatch });
+            visibilityOr.push({ createdBy: null, ...legacyMatch });
+        }
         const existingSearchOr = query.$or;
         delete query.$or;
         query.$and = [
@@ -179,7 +190,7 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     });
 });
 function ticketScopeQuery(user) {
-    const roleName = String(user?.role?.name || "").toUpperCase();
+    const roleName = String(user?.role?.name || "").trim().toUpperCase();
     if (roleName === 'ENGINEER') {
         // Engineers can always work on the repair stage, and can also access tickets explicitly
         // assigned to them in later stages (dispatch/installation).
@@ -192,15 +203,28 @@ function ticketScopeQuery(user) {
         };
     }
     if (roleName === 'CUSTOMER') {
-        const legacyMatch = user?.phone
-            ? { 'customer.phone': user.phone }
-            : { 'customer.name': user?.name };
+        const email = user?.email ? String(user.email).trim().toLowerCase() : "";
+        const phone = user?.phone ? String(user.phone).trim() : "";
+        const name = user?.name ? String(user.name).trim() : "";
+        const legacyMatch = phone
+            ? { "customer.phone": phone }
+            : name
+                ? { "customer.name": name }
+                : null;
+        const visibilityOr = [{ createdBy: user._id }];
+        if (email)
+            visibilityOr.push({ "customer.email": email });
+        if (phone)
+            visibilityOr.push({ "customer.phone": phone });
+        // Last resort only when we don't have stable identifiers.
+        if (!email && !phone && name)
+            visibilityOr.push({ "customer.name": name });
+        if (legacyMatch) {
+            visibilityOr.push({ createdBy: { $exists: false }, ...legacyMatch });
+            visibilityOr.push({ createdBy: null, ...legacyMatch });
+        }
         return {
-            $or: [
-                { createdBy: user._id },
-                { createdBy: { $exists: false }, ...legacyMatch },
-                { createdBy: null, ...legacyMatch },
-            ],
+            $or: visibilityOr,
         };
     }
     return {};
@@ -252,7 +276,7 @@ function mapInstallationDocsForResponse(docs) {
     });
 }
 function applyInstallationApproval(ticket, user) {
-    const roleNorm = String(user?.role?.name || "").toUpperCase();
+    const roleNorm = String(user?.role?.name || "").trim().toUpperCase();
     ticket.status = "INSTALLATION_DONE";
     ticket.installation = {
         ...ticket.installation,
@@ -265,7 +289,7 @@ function applyInstallationApproval(ticket, user) {
 // @desc    Create ticket
 // @route   POST /api/tickets
 exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     const body = { ...(req.body || {}) };
     if (Object.prototype.hasOwnProperty.call(body, "serviceType")) {
         const st = String(body.serviceType || "").trim().toUpperCase();
@@ -328,7 +352,7 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
 // @desc    Create multiple tickets (bulk)
 // @route   POST /api/tickets/bulk
 exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     const raw = req.body?.tickets;
     if (!Array.isArray(raw) || raw.length === 0) {
         return res.status(400).json({ success: false, message: "tickets must be a non-empty array" });
@@ -439,7 +463,7 @@ exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res
 // @desc    Get single ticket
 // @route   GET /api/tickets/:id
 exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     const scopedQuery = { _id: req.params.id, ...ticketScopeQuery(req.user) };
     const ticketQuery = Ticket_model_1.default.findOne(scopedQuery)
         .populate('createdBy', 'email name phone')
@@ -483,7 +507,7 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
     // Extra safety beyond RBAC: enforce *which fields* each role can modify.
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const topKeys = Object.keys(body);
-    const roleNorm = String(roleName || "").toUpperCase();
+    const roleNorm = String(roleName || "").trim().toUpperCase();
     if (roleNorm === "ENGINEER" && String(ticket.status || "").toUpperCase() === "CLOSED") {
         return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
     }
@@ -678,7 +702,7 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
 // @desc    Assign engineer to on-site (offline booking) ticket
 // @route   POST /api/tickets/:id/onsite/assign
 exports.assignOnsiteBooking = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+    const roleNorm = String(req.user?.role?.name || "").trim().toUpperCase();
     if (roleNorm !== "ADMIN" && roleNorm !== "SALES") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
@@ -722,7 +746,7 @@ exports.assignOnsiteBooking = (0, error_middleware_1.asyncHandler)(async (req, r
         if (!id)
             return null;
         const u = await User_model_1.default.findById(id).populate("role", "name");
-        const roleName = String(u?.role?.name || "").toUpperCase();
+        const roleName = String(u?.role?.name || "").trim().toUpperCase();
         if (!u?._id || !u?.isActive || roleName !== "ENGINEER")
             return null;
         return String(u._id);
@@ -752,7 +776,7 @@ exports.assignOnsiteBooking = (0, error_middleware_1.asyncHandler)(async (req, r
 // @desc    Save on-site (offline booking) engineer job details and optionally close ticket
 // @route   PUT /api/tickets/:id/onsite/jobcard
 exports.upsertOnsiteJobCard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+    const roleNorm = String(req.user?.role?.name || "").trim().toUpperCase();
     if (roleNorm !== "ENGINEER") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
@@ -802,7 +826,7 @@ exports.upsertOnsiteJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
 // @desc    Approve installation (moves ticket DISPATCHED -> INSTALLATION_DONE)
 // @route   POST /api/tickets/:id/installation-done
 exports.approveInstallationDone = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+    const roleNorm = String(req.user?.role?.name || "").trim().toUpperCase();
     if (!["CUSTOMER", "SALES", "ADMIN", "ENGINEER"].includes(roleNorm)) {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
@@ -860,7 +884,7 @@ exports.getTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req
 // @desc    Upsert pickup details for a ticket (customer input)
 // @route   POST /api/tickets/:id/pickup-details
 exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     if (roleName !== "ADMIN" && roleName !== "SALES") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
@@ -910,7 +934,7 @@ exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (
 // @desc    Upload pickup document (PDF/Image) for a ticket
 // @route   POST /api/tickets/:id/pickup-documents
 exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     if (!["ADMIN", "SALES"].includes(roleName)) {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
@@ -1019,7 +1043,7 @@ exports.uploadTicketInstallationDocument = (0, error_middleware_1.asyncHandler)(
         });
         stream.end(file.buffer);
     });
-    const roleNorm = String(req.user?.role?.name || "").toUpperCase();
+    const roleNorm = String(req.user?.role?.name || "").trim().toUpperCase();
     const doc = {
         url: String(uploaded.secure_url),
         uploadedAt: new Date(),
@@ -1047,7 +1071,7 @@ exports.uploadTicketInstallationDocument = (0, error_middleware_1.asyncHandler)(
 // @route   GET /api/tickets/:id/jobcard
 exports.getTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     let ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).populate('jobCard');
-    if (!ticket && String(req.user?.role?.name || "").toUpperCase() === "ENGINEER") {
+    if (!ticket && String(req.user?.role?.name || "").trim().toUpperCase() === "ENGINEER") {
         // Legacy fallback: allow viewing job card for tickets engineer finalized.
         const raw = await Ticket_model_1.default.findById(req.params.id).populate("jobCard");
         const finalizedBy = raw?.jobCard?.engineerFinalizedBy ? String(raw.jobCard.engineerFinalizedBy) : "";
@@ -1118,7 +1142,7 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
     const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
-    if (String(req.user?.role?.name || "").toUpperCase() === "ENGINEER" &&
+    if (String(req.user?.role?.name || "").trim().toUpperCase() === "ENGINEER" &&
         String(ticket.status || "").toUpperCase() === "CLOSED") {
         return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
     }
@@ -1130,7 +1154,7 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
     const requestedFinal = String(req.body?.engineerFinalStatus || "").toUpperCase().trim();
     const requestedFinalizedAt = toDateOrNull(req.body?.engineerFinalizedAt);
     const canSetFinal = requestedFinal === "REPAIRABLE" || requestedFinal === "NOT_REPAIRABLE";
-    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
     const created = !jobcard;
     if (!jobcard) {
         jobcard = await JobCard_model_1.default.create({

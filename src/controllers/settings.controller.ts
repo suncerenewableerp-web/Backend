@@ -4,6 +4,7 @@ import JobCardEngineerName from "../models/JobCardEngineerName.model";
 import JobCardRepairActionName from "../models/JobCardRepairActionName.model";
 import { asyncHandler } from "../middleware/error.middleware";
 
+
 const DEFAULT_INVERTER_BRANDS = [
   "ABB",
   "ADVANCED ENERGY",

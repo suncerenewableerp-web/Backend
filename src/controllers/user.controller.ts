@@ -220,6 +220,44 @@ export const updateUserRole = asyncHandler(async (req: any, res: any) => {
   res.json({ success: true, data: { user } });
 });
 
+// @desc    Delete (deactivate) a user
+// @route   DELETE /api/users/:id
+export const deleteUser = asyncHandler(async (req: any, res: any) => {
+  const actorId = String(req.user?._id || "").trim();
+  const userId = String(req.params.id || "").trim();
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: "User id is required" });
+  }
+  if (actorId && userId === actorId) {
+    return res.status(400).json({ success: false, message: "You cannot delete your own account." });
+  }
+
+  const user: any = await User.findById(userId).populate("role", "name");
+  if (!user || user.isActive === false) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  const targetRole = String(user?.role?.name || "").trim().toUpperCase();
+  if (targetRole === "ADMIN") {
+    const adminRole: any = await Role.findOne({ name: "ADMIN" }).select("_id").lean();
+    const adminCount = adminRole?._id
+      ? await User.countDocuments({ role: adminRole._id, isActive: true })
+      : 0;
+    if (adminCount <= 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete user: at least one ADMIN is required.",
+      });
+    }
+  }
+
+  user.isActive = false;
+  await user.save();
+
+  res.json({ success: true, message: "User deleted" });
+});
+
 // @desc    Get engineers
 // @route   GET /api/users/engineers
 export const getEngineers = asyncHandler(async (req: any, res: any) => {

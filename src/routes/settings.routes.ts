@@ -4,12 +4,16 @@ import { asyncHandler } from "../middleware/error.middleware";
 import {
   addInverterBrand,
   addJobCardEngineerName,
+  addJobCardRepairActionName,
   deleteInverterBrand,
   deleteJobCardEngineerName,
+  deleteJobCardRepairActionName,
   getSlaSettings,
   listJobCardEngineerNames,
+  listJobCardRepairActionNames,
   listInverterBrands,
   updateSlaSettings,
+  updateJobCardRepairActionName,
 } from "../controllers/settings.controller";
 
 const router = express.Router();
@@ -26,5 +30,10 @@ router.delete('/inverter-brands/:key', authorize('tickets', 'edit'), asyncHandle
 router.get('/jobcard-engineers', authorize('tickets', 'view'), asyncHandler(listJobCardEngineerNames));
 router.post('/jobcard-engineers', authorize('tickets', 'edit'), asyncHandler(addJobCardEngineerName));
 router.delete('/jobcard-engineers/:key', authorize('tickets', 'edit'), asyncHandler(deleteJobCardEngineerName));
+
+router.get('/jobcard-repair-actions', authorize('tickets', 'view'), asyncHandler(listJobCardRepairActionNames));
+router.post('/jobcard-repair-actions', authorize('tickets', 'edit'), asyncHandler(addJobCardRepairActionName));
+router.put('/jobcard-repair-actions/:key', authorize('tickets', 'edit'), asyncHandler(updateJobCardRepairActionName));
+router.delete('/jobcard-repair-actions/:key', authorize('tickets', 'edit'), asyncHandler(deleteJobCardRepairActionName));
 
 export default router;

@@ -3,10 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
+exports.deleteJobCardRepairActionName = exports.updateJobCardRepairActionName = exports.addJobCardRepairActionName = exports.listJobCardRepairActionNames = exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
 const SlaSettings_model_1 = __importDefault(require("../models/SlaSettings.model"));
 const InverterBrand_model_1 = __importDefault(require("../models/InverterBrand.model"));
 const JobCardEngineerName_model_1 = __importDefault(require("../models/JobCardEngineerName.model"));
+const JobCardRepairActionName_model_1 = __importDefault(require("../models/JobCardRepairActionName.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const DEFAULT_INVERTER_BRANDS = [
     "ABB",
@@ -72,6 +73,16 @@ function normalizeBrandName(input) {
     return { name, key };
 }
 function normalizeJobCardEngineerName(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return null;
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (!name)
+        return null;
+    const key = name.toLowerCase();
+    return { name, key };
+}
+function normalizeJobCardRepairActionName(input) {
     const raw = String(input || "").trim();
     if (!raw)
         return null;
@@ -213,6 +224,78 @@ exports.deleteJobCardEngineerName = (0, error_middleware_1.asyncHandler)(async (
         return res.status(400).json({ success: false, message: "Name key is required" });
     }
     const deleted = await JobCardEngineerName_model_1.default.findOneAndDelete({ key: parsed.key }).lean();
+    if (!deleted) {
+        return res.status(404).json({ success: false, message: "Name not found" });
+    }
+    res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+// @desc    List jobcard card-repair action names (dropdown)
+// @route   GET /api/settings/jobcard-repair-actions
+exports.listJobCardRepairActionNames = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const rows = await JobCardRepairActionName_model_1.default.find({}).select("name").sort({ name: 1 }).lean();
+    const names = (rows || []).map((r) => String(r?.name || "").trim()).filter(Boolean);
+    res.json({ success: true, data: names });
+});
+// @desc    Add a jobcard card-repair action name (admin)
+// @route   POST /api/settings/jobcard-repair-actions
+exports.addJobCardRepairActionName = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeJobCardRepairActionName(req.body?.name);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Name is required" });
+    }
+    if (parsed.name.length > 80) {
+        return res.status(400).json({ success: false, message: "Name too long" });
+    }
+    const doc = await JobCardRepairActionName_model_1.default.findOneAndUpdate({ key: parsed.key }, { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }).lean();
+    res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+// @desc    Update a jobcard card-repair action name (admin)
+// @route   PUT /api/settings/jobcard-repair-actions/:key
+exports.updateJobCardRepairActionName = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const oldParsed = normalizeJobCardRepairActionName(req.params?.key);
+    if (!oldParsed) {
+        return res.status(400).json({ success: false, message: "Name key is required" });
+    }
+    const nextParsed = normalizeJobCardRepairActionName(req.body?.name);
+    if (!nextParsed) {
+        return res.status(400).json({ success: false, message: "Name is required" });
+    }
+    if (nextParsed.name.length > 80) {
+        return res.status(400).json({ success: false, message: "Name too long" });
+    }
+    const current = await JobCardRepairActionName_model_1.default.findOne({ key: oldParsed.key }).select("_id key").lean();
+    if (!current?._id) {
+        return res.status(404).json({ success: false, message: "Name not found" });
+    }
+    if (nextParsed.key !== oldParsed.key) {
+        const collision = await JobCardRepairActionName_model_1.default.findOne({ key: nextParsed.key }).select("_id").lean();
+        if (collision?._id) {
+            return res.status(400).json({ success: false, message: "Name already exists" });
+        }
+    }
+    const updated = await JobCardRepairActionName_model_1.default.findOneAndUpdate({ key: oldParsed.key }, { $set: { name: nextParsed.name, key: nextParsed.key } }, { new: true, runValidators: true }).lean();
+    res.json({ success: true, data: { name: String(updated?.name || nextParsed.name || "").trim() } });
+});
+// @desc    Delete a jobcard card-repair action name (admin)
+// @route   DELETE /api/settings/jobcard-repair-actions/:key
+exports.deleteJobCardRepairActionName = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeJobCardRepairActionName(req.params?.key);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Name key is required" });
+    }
+    const deleted = await JobCardRepairActionName_model_1.default.findOneAndDelete({ key: parsed.key }).lean();
     if (!deleted) {
         return res.status(404).json({ success: false, message: "Name not found" });
     }

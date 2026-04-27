@@ -2,6 +2,7 @@ import express from "express";
 import { authorize, verifyToken } from "../middleware/auth.middleware";
 import {
   createUser,
+  deleteUser,
   getUsers,
   getEngineerNames,
   getEngineers,
@@ -17,6 +18,7 @@ router.use(verifyToken); // All users routes protected
 
 router.get('/', authorize("users", "view"), asyncHandler(getUsers));
 router.post('/', authorize("users", "create"), asyncHandler(createUser));
+router.delete("/:id", authorize("users", "delete"), asyncHandler(deleteUser));
 router.put('/:id/password', authorize("users", "edit"), asyncHandler(setUserPassword));
 router.post('/:id/password/reset', authorize("users", "edit"), asyncHandler(resetUserPassword));
 router.put("/:id/role", authorize("users", "edit"), asyncHandler(updateUserRole));

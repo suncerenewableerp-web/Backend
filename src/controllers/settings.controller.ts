@@ -1,6 +1,7 @@
 import SlaSettings from "../models/SlaSettings.model";
 import InverterBrand from "../models/InverterBrand.model";
 import JobCardEngineerName from "../models/JobCardEngineerName.model";
+import JobCardRepairActionName from "../models/JobCardRepairActionName.model";
 import { asyncHandler } from "../middleware/error.middleware";
 
 const DEFAULT_INVERTER_BRANDS = [
@@ -67,6 +68,15 @@ function normalizeBrandName(input: any) {
 }
 
 function normalizeJobCardEngineerName(input: any) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  const key = name.toLowerCase();
+  return { name, key };
+}
+
+function normalizeJobCardRepairActionName(input: any) {
   const raw = String(input || "").trim();
   if (!raw) return null;
   const name = raw.replace(/\s+/g, " ").trim();
@@ -237,6 +247,102 @@ export const deleteJobCardEngineerName = asyncHandler(async (req: any, res: any)
   }
 
   const deleted = await JobCardEngineerName.findOneAndDelete({ key: parsed.key }).lean();
+  if (!deleted) {
+    return res.status(404).json({ success: false, message: "Name not found" });
+  }
+
+  res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+
+// @desc    List jobcard card-repair action names (dropdown)
+// @route   GET /api/settings/jobcard-repair-actions
+export const listJobCardRepairActionNames = asyncHandler(async (req: any, res: any) => {
+  const rows = await JobCardRepairActionName.find({}).select("name").sort({ name: 1 }).lean();
+  const names = (rows || []).map((r: any) => String(r?.name || "").trim()).filter(Boolean);
+  res.json({ success: true, data: names });
+});
+
+// @desc    Add a jobcard card-repair action name (admin)
+// @route   POST /api/settings/jobcard-repair-actions
+export const addJobCardRepairActionName = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeJobCardRepairActionName(req.body?.name);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Name is required" });
+  }
+  if (parsed.name.length > 80) {
+    return res.status(400).json({ success: false, message: "Name too long" });
+  }
+
+  const doc = await JobCardRepairActionName.findOneAndUpdate(
+    { key: parsed.key },
+    { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+
+// @desc    Update a jobcard card-repair action name (admin)
+// @route   PUT /api/settings/jobcard-repair-actions/:key
+export const updateJobCardRepairActionName = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const oldParsed = normalizeJobCardRepairActionName(req.params?.key);
+  if (!oldParsed) {
+    return res.status(400).json({ success: false, message: "Name key is required" });
+  }
+
+  const nextParsed = normalizeJobCardRepairActionName(req.body?.name);
+  if (!nextParsed) {
+    return res.status(400).json({ success: false, message: "Name is required" });
+  }
+  if (nextParsed.name.length > 80) {
+    return res.status(400).json({ success: false, message: "Name too long" });
+  }
+
+  const current = await JobCardRepairActionName.findOne({ key: oldParsed.key }).select("_id key").lean();
+  if (!current?._id) {
+    return res.status(404).json({ success: false, message: "Name not found" });
+  }
+
+  if (nextParsed.key !== oldParsed.key) {
+    const collision = await JobCardRepairActionName.findOne({ key: nextParsed.key }).select("_id").lean();
+    if (collision?._id) {
+      return res.status(400).json({ success: false, message: "Name already exists" });
+    }
+  }
+
+  const updated = await JobCardRepairActionName.findOneAndUpdate(
+    { key: oldParsed.key },
+    { $set: { name: nextParsed.name, key: nextParsed.key } },
+    { new: true, runValidators: true },
+  ).lean();
+
+  res.json({ success: true, data: { name: String(updated?.name || nextParsed.name || "").trim() } });
+});
+
+// @desc    Delete a jobcard card-repair action name (admin)
+// @route   DELETE /api/settings/jobcard-repair-actions/:key
+export const deleteJobCardRepairActionName = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeJobCardRepairActionName(req.params?.key);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Name key is required" });
+  }
+
+  const deleted = await JobCardRepairActionName.findOneAndDelete({ key: parsed.key }).lean();
   if (!deleted) {
     return res.status(404).json({ success: false, message: "Name not found" });
   }

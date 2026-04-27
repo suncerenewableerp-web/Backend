@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getEngineerNames = exports.getEngineers = exports.updateUserRole = exports.resetUserPassword = exports.setUserPassword = exports.createUser = exports.getUsers = void 0;
+exports.getEngineerNames = exports.getEngineers = exports.deleteUser = exports.updateUserRole = exports.resetUserPassword = exports.setUserPassword = exports.createUser = exports.getUsers = void 0;
 const User_model_1 = __importDefault(require("../models/User.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
@@ -192,6 +192,38 @@ exports.updateUserRole = (0, error_middleware_1.asyncHandler)(async (req, res) =
     await user.populate("role", "name");
     user.password = undefined;
     res.json({ success: true, data: { user } });
+});
+// @desc    Delete (deactivate) a user
+// @route   DELETE /api/users/:id
+exports.deleteUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const actorId = String(req.user?._id || "").trim();
+    const userId = String(req.params.id || "").trim();
+    if (!userId) {
+        return res.status(400).json({ success: false, message: "User id is required" });
+    }
+    if (actorId && userId === actorId) {
+        return res.status(400).json({ success: false, message: "You cannot delete your own account." });
+    }
+    const user = await User_model_1.default.findById(userId).populate("role", "name");
+    if (!user || user.isActive === false) {
+        return res.status(404).json({ success: false, message: "User not found" });
+    }
+    const targetRole = String(user?.role?.name || "").trim().toUpperCase();
+    if (targetRole === "ADMIN") {
+        const adminRole = await Role_model_1.default.findOne({ name: "ADMIN" }).select("_id").lean();
+        const adminCount = adminRole?._id
+            ? await User_model_1.default.countDocuments({ role: adminRole._id, isActive: true })
+            : 0;
+        if (adminCount <= 1) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot delete user: at least one ADMIN is required.",
+            });
+        }
+    }
+    user.isActive = false;
+    await user.save();
+    res.json({ success: true, message: "User deleted" });
 });
 // @desc    Get engineers
 // @route   GET /api/users/engineers

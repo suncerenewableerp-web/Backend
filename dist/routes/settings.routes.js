@@ -17,4 +17,8 @@ router.delete('/inverter-brands/:key', (0, auth_middleware_1.authorize)('tickets
 router.get('/jobcard-engineers', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listJobCardEngineerNames));
 router.post('/jobcard-engineers', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addJobCardEngineerName));
 router.delete('/jobcard-engineers/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteJobCardEngineerName));
+router.get('/jobcard-repair-actions', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listJobCardRepairActionNames));
+router.post('/jobcard-repair-actions', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addJobCardRepairActionName));
+router.put('/jobcard-repair-actions/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.updateJobCardRepairActionName));
+router.delete('/jobcard-repair-actions/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteJobCardRepairActionName));
 exports.default = router;

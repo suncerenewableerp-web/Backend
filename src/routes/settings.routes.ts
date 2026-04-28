@@ -2,13 +2,19 @@ import express from "express";
 import { verifyToken, authorize } from "../middleware/auth.middleware";
 import { asyncHandler } from "../middleware/error.middleware";
 import {
+  addCustomerCompany,
+  addInverterCapacity,
   addInverterBrand,
   addJobCardEngineerName,
   addJobCardRepairActionName,
+  deleteCustomerCompany,
+  deleteInverterCapacity,
   deleteInverterBrand,
   deleteJobCardEngineerName,
   deleteJobCardRepairActionName,
   getSlaSettings,
+  listCustomerCompanies,
+  listInverterCapacities,
   listJobCardEngineerNames,
   listJobCardRepairActionNames,
   listInverterBrands,
@@ -26,6 +32,14 @@ router.put('/sla', authorize('sla', 'edit'), asyncHandler(updateSlaSettings));
 router.get('/inverter-brands', authorize('tickets', 'view'), asyncHandler(listInverterBrands));
 router.post('/inverter-brands', authorize('tickets', 'edit'), asyncHandler(addInverterBrand));
 router.delete('/inverter-brands/:key', authorize('tickets', 'edit'), asyncHandler(deleteInverterBrand));
+
+router.get('/customer-companies', authorize('tickets', 'view'), asyncHandler(listCustomerCompanies));
+router.post('/customer-companies', authorize('tickets', 'edit'), asyncHandler(addCustomerCompany));
+router.delete('/customer-companies/:key', authorize('tickets', 'edit'), asyncHandler(deleteCustomerCompany));
+
+router.get('/inverter-capacities', authorize('tickets', 'view'), asyncHandler(listInverterCapacities));
+router.post('/inverter-capacities', authorize('tickets', 'edit'), asyncHandler(addInverterCapacity));
+router.delete('/inverter-capacities/:key', authorize('tickets', 'edit'), asyncHandler(deleteInverterCapacity));
 
 router.get('/jobcard-engineers', authorize('tickets', 'view'), asyncHandler(listJobCardEngineerNames));
 router.post('/jobcard-engineers', authorize('tickets', 'edit'), asyncHandler(addJobCardEngineerName));

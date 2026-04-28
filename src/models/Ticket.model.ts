@@ -91,6 +91,9 @@ const ticketSchema = new mongoose.Schema({
     notes: String
   }],
   assignedTo: [{ type: mongoose.Schema.ObjectId, ref: 'User' }], // Engineers
+  salesAssignee: { type: mongoose.Schema.ObjectId, ref: "User" }, // Sales owner (optional)
+  salesAssigneeEmail: { type: String, trim: true, lowercase: true },
+  salesAssigneeName: { type: String, trim: true },
   jobCard: { type: mongoose.Schema.ObjectId, ref: 'JobCard' },
   logistics: { type: mongoose.Schema.ObjectId, ref: 'Logistics' },
   slaStatus: {

@@ -3,12 +3,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteJobCardRepairActionName = exports.updateJobCardRepairActionName = exports.addJobCardRepairActionName = exports.listJobCardRepairActionNames = exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
+exports.deleteJobCardRepairActionName = exports.updateJobCardRepairActionName = exports.addJobCardRepairActionName = exports.listJobCardRepairActionNames = exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterCapacity = exports.addInverterCapacity = exports.listInverterCapacities = exports.deleteCustomerCompany = exports.addCustomerCompany = exports.listCustomerCompanies = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
 const SlaSettings_model_1 = __importDefault(require("../models/SlaSettings.model"));
 const InverterBrand_model_1 = __importDefault(require("../models/InverterBrand.model"));
+const CustomerCompany_model_1 = __importDefault(require("../models/CustomerCompany.model"));
+const InverterCapacity_model_1 = __importDefault(require("../models/InverterCapacity.model"));
 const JobCardEngineerName_model_1 = __importDefault(require("../models/JobCardEngineerName.model"));
 const JobCardRepairActionName_model_1 = __importDefault(require("../models/JobCardRepairActionName.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
+const company_rep_seed_json_1 = __importDefault(require("../data/company_rep_seed.json"));
 const DEFAULT_INVERTER_BRANDS = [
     "ABB",
     "ADVANCED ENERGY",
@@ -66,6 +69,26 @@ function normalizeBrandName(input) {
     if (!raw)
         return null;
     // Collapse whitespace and normalize.
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (!name)
+        return null;
+    const key = name.toLowerCase();
+    return { name, key };
+}
+function normalizeCompanyName(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return null;
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (!name)
+        return null;
+    const key = name.toLowerCase();
+    return { name, key };
+}
+function normalizeCapacityName(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return null;
     const name = raw.replace(/\s+/g, " ").trim();
     if (!name)
         return null;
@@ -185,6 +208,108 @@ exports.deleteInverterBrand = (0, error_middleware_1.asyncHandler)(async (req, r
     const deleted = await InverterBrand_model_1.default.findOneAndDelete({ key: parsed.key }).lean();
     if (!deleted) {
         return res.status(404).json({ success: false, message: "Brand not found" });
+    }
+    res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+// @desc    List customer companies (for dropdown)
+// @route   GET /api/settings/customer-companies
+exports.listCustomerCompanies = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const existingCount = await CustomerCompany_model_1.default.estimatedDocumentCount().catch(() => 0);
+    if (!existingCount) {
+        const seedRows = Array.isArray(company_rep_seed_json_1.default) ? company_rep_seed_json_1.default : [];
+        const docs = seedRows
+            .map((r) => {
+            const name = String(r?.name || "").trim();
+            const key = String(r?.key || "").trim();
+            const repEmail = String(r?.repEmail || "").trim().toLowerCase();
+            if (!name || !key)
+                return null;
+            return { name, key, ...(repEmail ? { repEmail } : {}) };
+        })
+            .filter(Boolean);
+        try {
+            await CustomerCompany_model_1.default.insertMany(docs, { ordered: false });
+        }
+        catch {
+            // ignore
+        }
+    }
+    const rows = await CustomerCompany_model_1.default.find({}).select("name").sort({ name: 1 }).lean();
+    const companies = (rows || []).map((r) => String(r?.name || "").trim()).filter(Boolean);
+    res.json({ success: true, data: companies });
+});
+// @desc    Add customer company to dropdown list (admin/sales)
+// @route   POST /api/settings/customer-companies
+exports.addCustomerCompany = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeCompanyName(req.body?.name);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Company name is required" });
+    }
+    if (parsed.name.length > 120) {
+        return res.status(400).json({ success: false, message: "Company name too long" });
+    }
+    const doc = await CustomerCompany_model_1.default.findOneAndUpdate({ key: parsed.key }, { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }).lean();
+    res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+// @desc    Delete customer company from dropdown list (admin/sales)
+// @route   DELETE /api/settings/customer-companies/:key
+exports.deleteCustomerCompany = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeCompanyName(req.params?.key);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Company key is required" });
+    }
+    const deleted = await CustomerCompany_model_1.default.findOneAndDelete({ key: parsed.key }).lean();
+    if (!deleted) {
+        return res.status(404).json({ success: false, message: "Company not found" });
+    }
+    res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+// @desc    List inverter capacities (for dropdown)
+// @route   GET /api/settings/inverter-capacities
+exports.listInverterCapacities = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const rows = await InverterCapacity_model_1.default.find({}).select("name").sort({ name: 1 }).lean();
+    const capacities = (rows || []).map((r) => String(r?.name || "").trim()).filter(Boolean);
+    res.json({ success: true, data: capacities });
+});
+// @desc    Add inverter capacity to dropdown list (admin/sales)
+// @route   POST /api/settings/inverter-capacities
+exports.addInverterCapacity = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeCapacityName(req.body?.name);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Capacity is required" });
+    }
+    if (parsed.name.length > 40) {
+        return res.status(400).json({ success: false, message: "Capacity too long" });
+    }
+    const doc = await InverterCapacity_model_1.default.findOneAndUpdate({ key: parsed.key }, { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }).lean();
+    res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+// @desc    Delete inverter capacity from dropdown list (admin)
+// @route   DELETE /api/settings/inverter-capacities/:key
+exports.deleteInverterCapacity = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsed = normalizeCapacityName(req.params?.key);
+    if (!parsed) {
+        return res.status(400).json({ success: false, message: "Capacity key is required" });
+    }
+    const deleted = await InverterCapacity_model_1.default.findOneAndDelete({ key: parsed.key }).lean();
+    if (!deleted) {
+        return res.status(404).json({ success: false, message: "Capacity not found" });
     }
     res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
 });

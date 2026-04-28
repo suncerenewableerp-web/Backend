@@ -9,11 +9,13 @@ const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const User_model_1 = __importDefault(require("../models/User.model"));
+const CustomerCompany_model_1 = __importDefault(require("../models/CustomerCompany.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
 const cloudinary_1 = require("../config/cloudinary");
 const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
 const email_1 = require("../utils/email");
+const company_rep_seed_json_1 = __importDefault(require("../data/company_rep_seed.json"));
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
     { sr: 1, activity: 'Continuity test of AC side', result: '' },
     { sr: 2, activity: 'Continuity test of DC side', result: '' },
@@ -37,6 +39,61 @@ function addDays(d, days) {
 }
 function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function normalizeCompanyKey(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return null;
+    const collapsed = raw.replace(/\s+/g, " ").trim();
+    if (!collapsed)
+        return null;
+    return collapsed.toLowerCase();
+}
+let customerCompanySeeded = null;
+async function ensureCustomerCompaniesSeeded() {
+    if (customerCompanySeeded === true)
+        return;
+    const count = await CustomerCompany_model_1.default.estimatedDocumentCount().catch(() => 0);
+    if (count > 0) {
+        customerCompanySeeded = true;
+        return;
+    }
+    const seedRows = Array.isArray(company_rep_seed_json_1.default) ? company_rep_seed_json_1.default : [];
+    const docs = seedRows
+        .map((r) => {
+        const name = String(r?.name || "").trim();
+        const key = String(r?.key || "").trim();
+        const repEmail = String(r?.repEmail || "").trim().toLowerCase();
+        if (!name || !key)
+            return null;
+        return { name, key, ...(repEmail ? { repEmail } : {}) };
+    })
+        .filter(Boolean);
+    try {
+        await CustomerCompany_model_1.default.insertMany(docs, { ordered: false });
+    }
+    catch {
+        // ignore duplicates
+    }
+    customerCompanySeeded = true;
+}
+async function resolveSalesAssigneeForCompany(companyName) {
+    const key = normalizeCompanyKey(companyName);
+    if (!key)
+        return null;
+    await ensureCustomerCompaniesSeeded();
+    const row = await CustomerCompany_model_1.default.findOne({ key }).select("repEmail").lean();
+    const repEmail = row?.repEmail ? String(row.repEmail).trim().toLowerCase() : "";
+    if (!repEmail)
+        return null;
+    const user = await User_model_1.default.findOne({ email: repEmail }).select("_id name email role").populate("role", "name").lean();
+    const safeEmail = String(user?.email || repEmail || "").trim().toLowerCase();
+    const safeName = String(user?.name || "").trim() || safeEmail.split("@")[0] || safeEmail;
+    return {
+        ...(user?._id ? { userId: user._id } : {}),
+        email: safeEmail,
+        name: safeName,
+    };
 }
 function getAutoWarrantyPrefix(serialNo) {
     const raw = String(serialNo || "").trim().toUpperCase();
@@ -171,6 +228,7 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const ticketsQuery = Ticket_model_1.default.find(query)
         .populate('createdBy', 'email name phone')
         .populate('assignedTo', 'name')
+        .populate('salesAssignee', 'name email')
         .populate('statusHistory.changedBy', 'name')
         .sort('-createdAt')
         .skip(skip)
@@ -335,12 +393,27 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
             ...(inputCustomer?.phone ? {} : req.user.phone ? { phone: req.user.phone } : {}),
         };
     }
+    // Auto-assign Sales owner based on customer company → rep mapping.
+    if (Object.prototype.hasOwnProperty.call(body, "salesAssignee"))
+        delete body.salesAssignee;
+    if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeEmail"))
+        delete body.salesAssigneeEmail;
+    if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeName"))
+        delete body.salesAssigneeName;
+    const salesAssignee = await resolveSalesAssigneeForCompany(body?.customer?.company);
+    if (salesAssignee) {
+        if (salesAssignee.userId)
+            body.salesAssignee = salesAssignee.userId;
+        body.salesAssigneeEmail = salesAssignee.email;
+        body.salesAssigneeName = salesAssignee.name;
+    }
     const ticket = await Ticket_model_1.default.create({
         ...body,
         createdBy: req.user?._id,
         statusHistory: [{ status: 'CREATED', changedBy: req.user._id }]
     });
     await ticket.populate('statusHistory.changedBy', 'name');
+    await ticket.populate('salesAssignee', 'name email');
     const data = ticket.toObject();
     if (roleName === "CUSTOMER") {
         if (data?.inverter && Object.prototype.hasOwnProperty.call(data.inverter, "warrantyEnd")) {
@@ -442,6 +515,22 @@ exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res
         body.inverter = body.inverter && typeof body.inverter === "object" ? body.inverter : {};
         body.inverter.warrantyEnd = end;
     }
+    // Auto-assign Sales owner for each ticket based on customer company → rep mapping.
+    for (const body of bodies) {
+        if (Object.prototype.hasOwnProperty.call(body, "salesAssignee"))
+            delete body.salesAssignee;
+        if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeEmail"))
+            delete body.salesAssigneeEmail;
+        if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeName"))
+            delete body.salesAssigneeName;
+        const salesAssignee = await resolveSalesAssigneeForCompany(body?.customer?.company);
+        if (salesAssignee) {
+            if (salesAssignee.userId)
+                body.salesAssignee = salesAssignee.userId;
+            body.salesAssigneeEmail = salesAssignee.email;
+            body.salesAssigneeName = salesAssignee.name;
+        }
+    }
     const payload = bodies.map((body) => ({
         ...body,
         createdBy: req.user?._id,
@@ -449,6 +538,7 @@ exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res
     }));
     const created = await Ticket_model_1.default.insertMany(payload, { ordered: true });
     await Ticket_model_1.default.populate(created, { path: "statusHistory.changedBy", select: "name" });
+    await Ticket_model_1.default.populate(created, { path: "salesAssignee", select: "name email" });
     const tickets = (created || []).map((t) => {
         const obj = typeof t?.toObject === "function" ? t.toObject() : t;
         if (roleName === "CUSTOMER") {
@@ -468,6 +558,7 @@ exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const ticketQuery = Ticket_model_1.default.findOne(scopedQuery)
         .populate('createdBy', 'email name phone')
         .populate('assignedTo', 'name')
+        .populate('salesAssignee', 'name email')
         .populate('jobCard')
         .populate('logistics')
         .populate('statusHistory.changedBy', 'name');
@@ -487,6 +578,7 @@ exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
                 ticket = await Ticket_model_1.default.findById(req.params.id)
                     .populate('createdBy', 'email name phone')
                     .populate('assignedTo', 'name')
+                    .populate('salesAssignee', 'name email')
                     .populate('jobCard')
                     .populate('logistics')
                     .populate('statusHistory.changedBy', 'name');

@@ -1,8 +1,11 @@
 import SlaSettings from "../models/SlaSettings.model";
 import InverterBrand from "../models/InverterBrand.model";
+import CustomerCompany from "../models/CustomerCompany.model";
+import InverterCapacity from "../models/InverterCapacity.model";
 import JobCardEngineerName from "../models/JobCardEngineerName.model";
 import JobCardRepairActionName from "../models/JobCardRepairActionName.model";
 import { asyncHandler } from "../middleware/error.middleware";
+import companyRepSeed from "../data/company_rep_seed.json";
 
 const DEFAULT_INVERTER_BRANDS = [
   "ABB",
@@ -61,6 +64,24 @@ function normalizeBrandName(input: any) {
   const raw = String(input || "").trim();
   if (!raw) return null;
   // Collapse whitespace and normalize.
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  const key = name.toLowerCase();
+  return { name, key };
+}
+
+function normalizeCompanyName(input: any) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  const key = name.toLowerCase();
+  return { name, key };
+}
+
+function normalizeCapacityName(input: any) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
   const name = raw.replace(/\s+/g, " ").trim();
   if (!name) return null;
   const key = name.toLowerCase();
@@ -195,6 +216,133 @@ export const deleteInverterBrand = asyncHandler(async (req: any, res: any) => {
   const deleted = await InverterBrand.findOneAndDelete({ key: parsed.key }).lean();
   if (!deleted) {
     return res.status(404).json({ success: false, message: "Brand not found" });
+  }
+
+  res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+
+// @desc    List customer companies (for dropdown)
+// @route   GET /api/settings/customer-companies
+export const listCustomerCompanies = asyncHandler(async (req: any, res: any) => {
+  const existingCount = await CustomerCompany.estimatedDocumentCount().catch(() => 0);
+  if (!existingCount) {
+    const seedRows = Array.isArray(companyRepSeed) ? (companyRepSeed as any[]) : [];
+    const docs = seedRows
+      .map((r) => {
+        const name = String(r?.name || "").trim();
+        const key = String(r?.key || "").trim();
+        const repEmail = String(r?.repEmail || "").trim().toLowerCase();
+        if (!name || !key) return null;
+        return { name, key, ...(repEmail ? { repEmail } : {}) };
+      })
+      .filter(Boolean);
+    try {
+      await CustomerCompany.insertMany(docs as any[], { ordered: false });
+    } catch {
+      // ignore
+    }
+  }
+
+  const rows = await CustomerCompany.find({}).select("name").sort({ name: 1 }).lean();
+  const companies = (rows || []).map((r: any) => String(r?.name || "").trim()).filter(Boolean);
+  res.json({ success: true, data: companies });
+});
+
+// @desc    Add customer company to dropdown list (admin/sales)
+// @route   POST /api/settings/customer-companies
+export const addCustomerCompany = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN" && roleName !== "SALES") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeCompanyName(req.body?.name);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Company name is required" });
+  }
+  if (parsed.name.length > 120) {
+    return res.status(400).json({ success: false, message: "Company name too long" });
+  }
+
+  const doc = await CustomerCompany.findOneAndUpdate(
+    { key: parsed.key },
+    { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+
+// @desc    Delete customer company from dropdown list (admin/sales)
+// @route   DELETE /api/settings/customer-companies/:key
+export const deleteCustomerCompany = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN" && roleName !== "SALES") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeCompanyName(req.params?.key);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Company key is required" });
+  }
+
+  const deleted = await CustomerCompany.findOneAndDelete({ key: parsed.key }).lean();
+  if (!deleted) {
+    return res.status(404).json({ success: false, message: "Company not found" });
+  }
+
+  res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+
+// @desc    List inverter capacities (for dropdown)
+// @route   GET /api/settings/inverter-capacities
+export const listInverterCapacities = asyncHandler(async (req: any, res: any) => {
+  const rows = await InverterCapacity.find({}).select("name").sort({ name: 1 }).lean();
+  const capacities = (rows || []).map((r: any) => String(r?.name || "").trim()).filter(Boolean);
+  res.json({ success: true, data: capacities });
+});
+
+// @desc    Add inverter capacity to dropdown list (admin/sales)
+// @route   POST /api/settings/inverter-capacities
+export const addInverterCapacity = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN" && roleName !== "SALES") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeCapacityName(req.body?.name);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Capacity is required" });
+  }
+  if (parsed.name.length > 40) {
+    return res.status(400).json({ success: false, message: "Capacity too long" });
+  }
+
+  const doc = await InverterCapacity.findOneAndUpdate(
+    { key: parsed.key },
+    { $setOnInsert: { name: parsed.name, key: parsed.key, createdBy: req.user?._id } },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  res.status(201).json({ success: true, data: { name: doc?.name || parsed.name } });
+});
+
+// @desc    Delete inverter capacity from dropdown list (admin)
+// @route   DELETE /api/settings/inverter-capacities/:key
+export const deleteInverterCapacity = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsed = normalizeCapacityName(req.params?.key);
+  if (!parsed) {
+    return res.status(400).json({ success: false, message: "Capacity key is required" });
+  }
+
+  const deleted = await InverterCapacity.findOneAndDelete({ key: parsed.key }).lean();
+  if (!deleted) {
+    return res.status(404).json({ success: false, message: "Capacity not found" });
   }
 
   res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });

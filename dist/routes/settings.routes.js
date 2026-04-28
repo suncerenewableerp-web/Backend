@@ -14,6 +14,12 @@ router.put('/sla', (0, auth_middleware_1.authorize)('sla', 'edit'), (0, error_mi
 router.get('/inverter-brands', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listInverterBrands));
 router.post('/inverter-brands', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addInverterBrand));
 router.delete('/inverter-brands/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteInverterBrand));
+router.get('/customer-companies', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listCustomerCompanies));
+router.post('/customer-companies', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addCustomerCompany));
+router.delete('/customer-companies/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteCustomerCompany));
+router.get('/inverter-capacities', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listInverterCapacities));
+router.post('/inverter-capacities', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addInverterCapacity));
+router.delete('/inverter-capacities/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteInverterCapacity));
 router.get('/jobcard-engineers', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)(settings_controller_1.listJobCardEngineerNames));
 router.post('/jobcard-engineers', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.addJobCardEngineerName));
 router.delete('/jobcard-engineers/:key', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)(settings_controller_1.deleteJobCardEngineerName));

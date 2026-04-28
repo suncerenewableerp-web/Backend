@@ -3,11 +3,13 @@ import JobCard from "../models/JobCard.model";
 import Logistics from "../models/Logistics.model";
 import Role from "../models/Role.model";
 import User from "../models/User.model";
+import CustomerCompany from "../models/CustomerCompany.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
 import { cloudinary, ensureCloudinaryConfigured } from "../config/cloudinary";
 import { mapCloudinaryDocUrls, toCloudinaryPrivateDownloadUrl } from "../utils/cloudinaryDownloadUrl";
 import { sendEmail } from "../utils/email";
+import companyRepSeed from "../data/company_rep_seed.json";
 
 const DEFAULT_FINAL_TESTING_ACTIVITIES = [
   { sr: 1, activity: 'Continuity test of AC side', result: '' },
@@ -35,6 +37,64 @@ function addDays(d: Date, days: number) {
 
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeCompanyKey(input: any): string | null {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  if (!collapsed) return null;
+  return collapsed.toLowerCase();
+}
+
+let customerCompanySeeded: boolean | null = null;
+async function ensureCustomerCompaniesSeeded() {
+  if (customerCompanySeeded === true) return;
+  const count = await CustomerCompany.estimatedDocumentCount().catch(() => 0);
+  if (count > 0) {
+    customerCompanySeeded = true;
+    return;
+  }
+
+  const seedRows = Array.isArray(companyRepSeed) ? (companyRepSeed as any[]) : [];
+  const docs = seedRows
+    .map((r) => {
+      const name = String(r?.name || "").trim();
+      const key = String(r?.key || "").trim();
+      const repEmail = String(r?.repEmail || "").trim().toLowerCase();
+      if (!name || !key) return null;
+      return { name, key, ...(repEmail ? { repEmail } : {}) };
+    })
+    .filter(Boolean);
+  try {
+    await CustomerCompany.insertMany(docs as any[], { ordered: false });
+  } catch {
+    // ignore duplicates
+  }
+  customerCompanySeeded = true;
+}
+
+async function resolveSalesAssigneeForCompany(companyName: any): Promise<{
+  userId?: any;
+  email: string;
+  name: string;
+} | null> {
+  const key = normalizeCompanyKey(companyName);
+  if (!key) return null;
+
+  await ensureCustomerCompaniesSeeded();
+  const row = await CustomerCompany.findOne({ key }).select("repEmail").lean();
+  const repEmail = row?.repEmail ? String(row.repEmail).trim().toLowerCase() : "";
+  if (!repEmail) return null;
+
+  const user = await User.findOne({ email: repEmail }).select("_id name email role").populate("role", "name").lean();
+  const safeEmail = String(user?.email || repEmail || "").trim().toLowerCase();
+  const safeName = String(user?.name || "").trim() || safeEmail.split("@")[0] || safeEmail;
+  return {
+    ...(user?._id ? { userId: user._id } : {}),
+    email: safeEmail,
+    name: safeName,
+  };
 }
 
 function getAutoWarrantyPrefix(serialNo: any): string | null {
@@ -175,6 +235,7 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
   const ticketsQuery = Ticket.find(query)
     .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
+    .populate('salesAssignee', 'name email')
     .populate('statusHistory.changedBy', 'name')
     .sort('-createdAt')
     .skip(skip)
@@ -360,6 +421,17 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
     };
   }
 
+  // Auto-assign Sales owner based on customer company → rep mapping.
+  if (Object.prototype.hasOwnProperty.call(body, "salesAssignee")) delete body.salesAssignee;
+  if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeEmail")) delete body.salesAssigneeEmail;
+  if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeName")) delete body.salesAssigneeName;
+  const salesAssignee = await resolveSalesAssigneeForCompany(body?.customer?.company);
+  if (salesAssignee) {
+    if (salesAssignee.userId) body.salesAssignee = salesAssignee.userId;
+    body.salesAssigneeEmail = salesAssignee.email;
+    body.salesAssigneeName = salesAssignee.name;
+  }
+
   const ticket = await Ticket.create({
     ...body,
     createdBy: req.user?._id,
@@ -367,6 +439,7 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
   });
   
   await ticket.populate('statusHistory.changedBy', 'name');
+  await ticket.populate('salesAssignee', 'name email');
   const data = ticket.toObject();
   if (roleName === "CUSTOMER") {
     if (data?.inverter && Object.prototype.hasOwnProperty.call(data.inverter, "warrantyEnd")) {
@@ -481,6 +554,19 @@ export const createTicketsBulk = asyncHandler(async (req: any, res: any) => {
     body.inverter.warrantyEnd = end;
   }
 
+  // Auto-assign Sales owner for each ticket based on customer company → rep mapping.
+  for (const body of bodies) {
+    if (Object.prototype.hasOwnProperty.call(body, "salesAssignee")) delete body.salesAssignee;
+    if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeEmail")) delete body.salesAssigneeEmail;
+    if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeName")) delete body.salesAssigneeName;
+    const salesAssignee = await resolveSalesAssigneeForCompany(body?.customer?.company);
+    if (salesAssignee) {
+      if (salesAssignee.userId) body.salesAssignee = salesAssignee.userId;
+      body.salesAssigneeEmail = salesAssignee.email;
+      body.salesAssigneeName = salesAssignee.name;
+    }
+  }
+
   const payload = bodies.map((body) => ({
     ...body,
     createdBy: req.user?._id,
@@ -489,6 +575,7 @@ export const createTicketsBulk = asyncHandler(async (req: any, res: any) => {
 
   const created = await Ticket.insertMany(payload, { ordered: true });
   await Ticket.populate(created, { path: "statusHistory.changedBy", select: "name" });
+  await Ticket.populate(created, { path: "salesAssignee", select: "name email" });
 
   const tickets = (created || []).map((t: any) => {
     const obj = typeof t?.toObject === "function" ? t.toObject() : t;
@@ -511,6 +598,7 @@ export const getTicket = asyncHandler(async (req: any, res: any) => {
   const ticketQuery = Ticket.findOne(scopedQuery)
     .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
+    .populate('salesAssignee', 'name email')
     .populate('jobCard')
     .populate('logistics')
     .populate('statusHistory.changedBy', 'name');
@@ -533,6 +621,7 @@ export const getTicket = asyncHandler(async (req: any, res: any) => {
         ticket = await Ticket.findById(req.params.id)
           .populate('createdBy', 'email name phone')
           .populate('assignedTo', 'name')
+          .populate('salesAssignee', 'name email')
           .populate('jobCard')
           .populate('logistics')
           .populate('statusHistory.changedBy', 'name');

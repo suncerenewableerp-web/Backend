@@ -3,13 +3,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getApprovedDispatchApprovals = exports.getPendingDispatchApprovals = exports.scheduleDispatch = exports.approveDispatch = exports.saveUnderDispatch = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
+exports.getApprovedDispatchApprovals = exports.getPendingDispatchApprovals = exports.scheduleDispatch = exports.rejectDispatch = exports.approveDispatch = exports.saveUnderDispatch = exports.uploadUnderDispatchProof = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const User_model_1 = __importDefault(require("../models/User.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
+const cloudinary_1 = require("../config/cloudinary");
 const email_1 = require("../utils/email");
 // @desc    Get all logistics
 // @route   GET /api/logistics
@@ -57,6 +58,12 @@ function toBoolOrNull(v) {
             return false;
     }
     return null;
+}
+function normalizeRemark(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return "";
+    return raw.replace(/\s+/g, " ").trim().slice(0, 500);
 }
 // @desc    Schedule pickup for a ticket (creates/updates pickup logistics)
 // @route   POST /api/logistics/schedule-pickup
@@ -114,12 +121,110 @@ exports.getLogisticsByTicket = (0, error_middleware_1.asyncHandler)(async (req, 
         .limit(50);
     const data = logistics.map((row) => {
         const obj = typeof row?.toObject === "function" ? row.toObject() : row;
+        const proofUrl = obj?.billing?.proofDocument?.url ? String(obj.billing.proofDocument.url) : "";
         return {
             ...obj,
             documents: (0, cloudinaryDownloadUrl_1.mapCloudinaryDocUrls)(obj?.documents, { expiresInSeconds: 24 * 60 * 60 }),
+            billing: {
+                ...(obj?.billing || {}),
+                ...(proofUrl
+                    ? {
+                        proofDocument: {
+                            ...(obj?.billing?.proofDocument || {}),
+                            url: (0, cloudinaryDownloadUrl_1.toCloudinaryPrivateDownloadUrl)(proofUrl, { expiresInSeconds: 24 * 60 * 60 }),
+                        },
+                    }
+                    : {}),
+            },
         };
     });
     res.json({ success: true, data });
+});
+// @desc    Upload billing proof PDF for under-dispatch review (Sales/Admin)
+// @route   POST /api/logistics/under-dispatch-proof
+exports.uploadUnderDispatchProof = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = req.user?.role?.name;
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticketId = String(req.body?.ticketId || "").trim();
+    if (!ticketId) {
+        return res.status(400).json({ success: false, message: "ticketId is required" });
+    }
+    const ticket = await Ticket_model_1.default.findById(ticketId);
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    if (String(ticket.status || "").toUpperCase() === "CLOSED") {
+        return res.status(400).json({ success: false, message: "Closed tickets cannot be updated." });
+    }
+    const allowed = ["UNDER_REPAIRED", "UNDER_DISPATCH", "DISPATCHED", "INSTALLATION_DONE"];
+    if (!allowed.includes(String(ticket.status || "").toUpperCase())) {
+        return res.status(400).json({
+            success: false,
+            message: "Billing proof can be uploaded only when the ticket is UNDER_REPAIRED, UNDER_DISPATCH, DISPATCHED or INSTALLATION_DONE.",
+        });
+    }
+    const file = req.file;
+    if (!file || !file.buffer) {
+        return res.status(400).json({ success: false, message: "Missing file upload" });
+    }
+    const hasRemark = Object.prototype.hasOwnProperty.call(req.body || {}, "remark");
+    const remark = hasRemark ? normalizeRemark(req.body?.remark) : "";
+    (0, cloudinary_1.ensureCloudinaryConfigured)();
+    const base = String(process.env.CLOUDINARY_FOLDER || "sunce_erp").trim() || "sunce_erp";
+    const folder = `${base.replace(/\/+$/, "")}/billing_proofs`;
+    const ticketSeg = String(ticketId || "ticket")
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]+/g, "_")
+        .slice(0, 40);
+    const stamp = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const publicId = `${ticketSeg}_${stamp}`;
+    const uploaded = await new Promise((resolve, reject) => {
+        const stream = cloudinary_1.cloudinary.uploader.upload_stream({ folder, public_id: publicId, resource_type: "auto", access_mode: "public" }, (err, result) => {
+            if (err)
+                return reject(err);
+            if (!result || !result.secure_url)
+                return reject(new Error("Cloudinary upload failed"));
+            resolve({ secure_url: String(result.secure_url) });
+        });
+        stream.end(file.buffer);
+    });
+    let logistics = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" });
+    if (!logistics)
+        logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
+    logistics.billing = logistics.billing || {};
+    const roleNorm = String(roleName || "").toUpperCase();
+    logistics.billing.proofDocument = {
+        url: String(uploaded.secure_url),
+        uploadedAt: new Date(),
+        uploadedBy: req.user?._id,
+        uploadedByRole: roleNorm,
+        originalName: String(file.originalname || ""),
+        mimeType: String(file.mimetype || ""),
+        size: typeof file.size === "number" ? file.size : undefined,
+    };
+    if (hasRemark)
+        logistics.billing.salesRemark = remark;
+    // New proof upload means Sales can re-request approval; clear any previous rejection.
+    logistics.billing.dispatchRejected = false;
+    logistics.billing.dispatchRejectedAt = undefined;
+    logistics.billing.dispatchRejectedBy = undefined;
+    logistics.billing.dispatchRejectionRemark = "";
+    await logistics.save();
+    ticket.logistics = logistics._id;
+    await ticket.save().catch(() => { });
+    res.status(201).json({
+        success: true,
+        data: {
+            proofDocument: {
+                ...(logistics.billing.proofDocument || {}),
+                url: (0, cloudinaryDownloadUrl_1.toCloudinaryPrivateDownloadUrl)(String(logistics.billing.proofDocument.url), {
+                    expiresInSeconds: 24 * 60 * 60,
+                }),
+            },
+            salesRemark: String(logistics.billing.salesRemark || ""),
+        },
+    });
 });
 // @desc    Under-dispatch review (invoice + payment flags) for a ticket
 // @route   POST /api/logistics/under-dispatch
@@ -136,6 +241,8 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
         ? toBoolOrNull(req.body?.invoiceGenerated)
         : null;
     const paymentDone = hasOwn(req.body, "paymentDone") ? toBoolOrNull(req.body?.paymentDone) : null;
+    const hasRemark = hasOwn(req.body, "remark");
+    const remark = hasRemark ? normalizeRemark(req.body?.remark) : "";
     if (invoiceGenerated === null && paymentDone === null) {
         return res.status(400).json({
             success: false,
@@ -171,13 +278,31 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
         logistics.billing.invoiceGenerated = invoiceGenerated;
     if (paymentDone !== null)
         logistics.billing.paymentDone = paymentDone;
+    if (hasRemark)
+        logistics.billing.salesRemark = remark;
     const roleNorm = String(roleName || "").toUpperCase();
-    const shouldRequestApproval = roleNorm === "SALES" && !Boolean(logistics.billing.dispatchApproved);
-    const newlyRequested = shouldRequestApproval && !logistics.billing.dispatchApprovalRequestedAt;
+    const readyForApproval = Boolean(logistics.billing.invoiceGenerated) && Boolean(logistics.billing.paymentDone);
+    const hasProof = Boolean(logistics?.billing?.proofDocument?.url);
+    const shouldRequestApproval = roleNorm === "SALES" && readyForApproval && hasProof && !Boolean(logistics.billing.dispatchApproved);
+    if (roleNorm === "SALES" && readyForApproval && !hasProof) {
+        return res.status(400).json({
+            success: false,
+            message: "Please upload billing proof PDF before requesting Admin approval.",
+        });
+    }
+    const wasRejected = Boolean(logistics?.billing?.dispatchRejected);
+    const canRequestNow = shouldRequestApproval && (!logistics.billing.dispatchApprovalRequestedAt || wasRejected);
+    const newlyRequested = canRequestNow && (!logistics.billing.dispatchApprovalRequestedAt || wasRejected);
     if (shouldRequestApproval) {
-        if (!logistics.billing.dispatchApprovalRequestedAt) {
+        if (!logistics.billing.dispatchApprovalRequestedAt || wasRejected) {
             logistics.billing.dispatchApprovalRequestedAt = new Date();
             logistics.billing.dispatchApprovalRequestedBy = req.user?._id;
+        }
+        if (wasRejected) {
+            logistics.billing.dispatchRejected = false;
+            logistics.billing.dispatchRejectedAt = undefined;
+            logistics.billing.dispatchRejectedBy = undefined;
+            logistics.billing.dispatchRejectionRemark = "";
         }
     }
     await logistics.save();
@@ -221,6 +346,7 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
         data: {
             invoiceGenerated: Boolean(logistics?.billing?.invoiceGenerated),
             paymentDone: Boolean(logistics?.billing?.paymentDone),
+            salesRemark: String(logistics?.billing?.salesRemark || ""),
         },
     });
 });
@@ -242,10 +368,22 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
     if (!logistics) {
         logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
     }
+    const readyForApproval = Boolean(logistics?.billing?.invoiceGenerated) && Boolean(logistics?.billing?.paymentDone);
+    const hasProof = Boolean(logistics?.billing?.proofDocument?.url);
+    if (!readyForApproval || !hasProof) {
+        return res.status(400).json({
+            success: false,
+            message: "Invoice, payment and billing proof PDF are required before approving dispatch.",
+        });
+    }
     logistics.billing = logistics.billing || {};
     logistics.billing.dispatchApproved = true;
     logistics.billing.dispatchApprovedAt = new Date();
     logistics.billing.dispatchApprovedBy = req.user?._id;
+    logistics.billing.dispatchRejected = false;
+    logistics.billing.dispatchRejectedAt = undefined;
+    logistics.billing.dispatchRejectedBy = undefined;
+    logistics.billing.dispatchRejectionRemark = "";
     await logistics.save();
     ticket.logistics = logistics._id;
     await ticket.save().catch(() => { });
@@ -254,6 +392,51 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
         data: {
             dispatchApproved: true,
             dispatchApprovedAt: logistics.billing.dispatchApprovedAt,
+        },
+    });
+});
+// @desc    Admin rejects dispatch request for a ticket (requires remark)
+// @route   POST /api/logistics/reject-dispatch
+exports.rejectDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const ticketId = String(req.body?.ticketId || "").trim();
+    if (!ticketId) {
+        return res.status(400).json({ success: false, message: "ticketId is required" });
+    }
+    const remark = normalizeRemark(req.body?.remark);
+    if (!remark) {
+        return res.status(400).json({ success: false, message: "remark is required" });
+    }
+    const ticket = await Ticket_model_1.default.findById(ticketId);
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    let logistics = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" });
+    if (!logistics) {
+        logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
+    }
+    logistics.billing = logistics.billing || {};
+    if (Boolean(logistics.billing.dispatchApproved)) {
+        return res.status(400).json({ success: false, message: "Dispatch is already approved." });
+    }
+    if (!logistics.billing.dispatchApprovalRequestedAt) {
+        return res.status(400).json({ success: false, message: "No pending dispatch approval request." });
+    }
+    logistics.billing.dispatchRejected = true;
+    logistics.billing.dispatchRejectedAt = new Date();
+    logistics.billing.dispatchRejectedBy = req.user?._id;
+    logistics.billing.dispatchRejectionRemark = remark;
+    // Keep approval requestedAt/by for audit, but Sales must re-request after fixing.
+    await logistics.save();
+    ticket.logistics = logistics._id;
+    await ticket.save().catch(() => { });
+    res.status(200).json({
+        success: true,
+        data: {
+            dispatchRejected: true,
+            dispatchRejectionRemark: remark,
         },
     });
 });
@@ -328,7 +511,10 @@ exports.getPendingDispatchApprovals = (0, error_middleware_1.asyncHandler)(async
     const rows = await Logistics_model_1.default.find({
         type: "DELIVERY",
         "billing.dispatchApprovalRequestedAt": { $exists: true, $ne: null },
-        $or: [{ "billing.dispatchApproved": { $exists: false } }, { "billing.dispatchApproved": false }],
+        $and: [
+            { $or: [{ "billing.dispatchRejected": { $exists: false } }, { "billing.dispatchRejected": false }] },
+            { $or: [{ "billing.dispatchApproved": { $exists: false } }, { "billing.dispatchApproved": false }] },
+        ],
     })
         .populate("ticket", "ticketId status customer createdAt")
         .sort({ "billing.dispatchApprovalRequestedAt": -1, updatedAt: -1 })

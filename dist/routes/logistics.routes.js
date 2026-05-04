@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const upload_middleware_1 = require("../middleware/upload.middleware");
 const logistics_controller_1 = require("../controllers/logistics.controller");
 const error_middleware_1 = require("../middleware/error.middleware");
 const router = express_1.default.Router();
@@ -13,7 +14,9 @@ router.get('/', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error
 router.post('/', (0, auth_middleware_1.authorize)('logistics', 'create'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.createLogistics));
 router.post('/schedule-pickup', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.schedulePickup));
 router.post('/under-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.saveUnderDispatch));
+router.post('/under-dispatch-proof', (0, auth_middleware_1.authorize)('logistics', 'edit'), upload_middleware_1.dispatchProofUpload.single("file"), (0, error_middleware_1.asyncHandler)(logistics_controller_1.uploadUnderDispatchProof));
 router.post('/approve-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.approveDispatch));
+router.post('/reject-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.rejectDispatch));
 router.post('/schedule-dispatch', (0, auth_middleware_1.authorize)('logistics', 'edit'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.scheduleDispatch));
 router.get('/pending-dispatch-approvals', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.getPendingDispatchApprovals));
 router.get('/approved-dispatch-approvals', (0, auth_middleware_1.authorize)('logistics', 'view'), (0, error_middleware_1.asyncHandler)(logistics_controller_1.getApprovedDispatchApprovals));

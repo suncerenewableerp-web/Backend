@@ -3,11 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteJobCardRepairActionName = exports.updateJobCardRepairActionName = exports.addJobCardRepairActionName = exports.listJobCardRepairActionNames = exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterCapacity = exports.addInverterCapacity = exports.listInverterCapacities = exports.deleteCustomerCompany = exports.addCustomerCompany = exports.listCustomerCompanies = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
+exports.deleteJobCardRepairActionName = exports.updateJobCardRepairActionName = exports.addJobCardRepairActionName = exports.listJobCardRepairActionNames = exports.deleteJobCardEngineerName = exports.addJobCardEngineerName = exports.listJobCardEngineerNames = exports.deleteInverterCapacity = exports.addInverterCapacity = exports.listInverterCapacities = exports.addInverterModel = exports.listInverterModels = exports.deleteCustomerCompany = exports.addCustomerCompany = exports.listCustomerCompanies = exports.deleteInverterBrand = exports.addInverterBrand = exports.listInverterBrands = exports.updateSlaSettings = exports.getSlaSettings = void 0;
 const SlaSettings_model_1 = __importDefault(require("../models/SlaSettings.model"));
 const InverterBrand_model_1 = __importDefault(require("../models/InverterBrand.model"));
 const CustomerCompany_model_1 = __importDefault(require("../models/CustomerCompany.model"));
 const InverterCapacity_model_1 = __importDefault(require("../models/InverterCapacity.model"));
+const InverterModel_model_1 = __importDefault(require("../models/InverterModel.model"));
 const JobCardEngineerName_model_1 = __importDefault(require("../models/JobCardEngineerName.model"));
 const JobCardRepairActionName_model_1 = __importDefault(require("../models/JobCardRepairActionName.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
@@ -86,6 +87,16 @@ function normalizeCompanyName(input) {
     return { name, key };
 }
 function normalizeCapacityName(input) {
+    const raw = String(input || "").trim();
+    if (!raw)
+        return null;
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (!name)
+        return null;
+    const key = name.toLowerCase();
+    return { name, key };
+}
+function normalizeModelName(input) {
     const raw = String(input || "").trim();
     if (!raw)
         return null;
@@ -271,6 +282,49 @@ exports.deleteCustomerCompany = (0, error_middleware_1.asyncHandler)(async (req,
         return res.status(404).json({ success: false, message: "Company not found" });
     }
     res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+// @desc    List inverter models for a make (for dropdown)
+// @route   GET /api/settings/inverter-models?make=DELTA
+exports.listInverterModels = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const parsedMake = normalizeBrandName(req.query?.make || req.query?.makeKey);
+    if (!parsedMake) {
+        return res.status(400).json({ success: false, message: "make is required" });
+    }
+    const rows = await InverterModel_model_1.default.find({ makeKey: parsedMake.key }).select("name").sort({ name: 1 }).lean();
+    const models = (rows || []).map((r) => String(r?.name || "").trim()).filter(Boolean);
+    res.json({ success: true, data: models });
+});
+// @desc    Add inverter model to dropdown list for a make (admin/sales)
+// @route   POST /api/settings/inverter-models
+exports.addInverterModel = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").toUpperCase();
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const parsedMake = normalizeBrandName(req.body?.make || req.body?.inverterMake);
+    if (!parsedMake) {
+        return res.status(400).json({ success: false, message: "make is required" });
+    }
+    if (parsedMake.name.length > 80) {
+        return res.status(400).json({ success: false, message: "Make name too long" });
+    }
+    const parsedModel = normalizeModelName(req.body?.name || req.body?.model || req.body?.inverterModel);
+    if (!parsedModel) {
+        return res.status(400).json({ success: false, message: "Model name is required" });
+    }
+    if (parsedModel.name.length > 80) {
+        return res.status(400).json({ success: false, message: "Model name too long" });
+    }
+    const doc = await InverterModel_model_1.default.findOneAndUpdate({ makeKey: parsedMake.key, key: parsedModel.key }, {
+        $setOnInsert: {
+            make: parsedMake.name,
+            makeKey: parsedMake.key,
+            name: parsedModel.name,
+            key: parsedModel.key,
+            createdBy: req.user?._id,
+        },
+    }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }).lean();
+    res.status(201).json({ success: true, data: { name: doc?.name || parsedModel.name } });
 });
 // @desc    List inverter capacities (for dropdown)
 // @route   GET /api/settings/inverter-capacities

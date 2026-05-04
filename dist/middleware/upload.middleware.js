@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.installationDocumentUpload = exports.pickupDocumentUpload = void 0;
+exports.dispatchProofUpload = exports.installationDocumentUpload = exports.pickupDocumentUpload = void 0;
 const multer_1 = __importDefault(require("multer"));
 const allowedMimes = new Set([
     "application/pdf",
@@ -26,6 +26,20 @@ exports.pickupDocumentUpload = (0, multer_1.default)({
     },
 });
 exports.installationDocumentUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (_req, file, cb) => {
+        const mime = String(file.mimetype || "").toLowerCase();
+        if (mime !== "application/pdf") {
+            const err = new Error("Only PDF uploads are allowed.");
+            err.statusCode = 400;
+            cb(err);
+            return;
+        }
+        cb(null, true);
+    },
+});
+exports.dispatchProofUpload = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
     fileFilter: (_req, file, cb) => {

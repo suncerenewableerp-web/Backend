@@ -113,7 +113,6 @@ const ticketSchema = new mongoose_1.default.Schema({
 });
 // Index for fast queries
 ticketSchema.index({ status: 1, priority: 1 });
-ticketSchema.index({ ticketId: 1 });
 ticketSchema.index({ 'customer.phone': 1 });
 ticketSchema.index({ createdBy: 1 });
 ticketSchema.index({ slaStatus: 1 });

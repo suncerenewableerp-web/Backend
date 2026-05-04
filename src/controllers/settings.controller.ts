@@ -2,6 +2,7 @@ import SlaSettings from "../models/SlaSettings.model";
 import InverterBrand from "../models/InverterBrand.model";
 import CustomerCompany from "../models/CustomerCompany.model";
 import InverterCapacity from "../models/InverterCapacity.model";
+import InverterModel from "../models/InverterModel.model";
 import JobCardEngineerName from "../models/JobCardEngineerName.model";
 import JobCardRepairActionName from "../models/JobCardRepairActionName.model";
 import { asyncHandler } from "../middleware/error.middleware";
@@ -80,6 +81,15 @@ function normalizeCompanyName(input: any) {
 }
 
 function normalizeCapacityName(input: any) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return null;
+  const key = name.toLowerCase();
+  return { name, key };
+}
+
+function normalizeModelName(input: any) {
   const raw = String(input || "").trim();
   if (!raw) return null;
   const name = raw.replace(/\s+/g, " ").trim();
@@ -292,6 +302,60 @@ export const deleteCustomerCompany = asyncHandler(async (req: any, res: any) => 
   }
 
   res.json({ success: true, data: { name: String(deleted?.name || "").trim() } });
+});
+
+// @desc    List inverter models for a make (for dropdown)
+// @route   GET /api/settings/inverter-models?make=DELTA
+export const listInverterModels = asyncHandler(async (req: any, res: any) => {
+  const parsedMake = normalizeBrandName(req.query?.make || req.query?.makeKey);
+  if (!parsedMake) {
+    return res.status(400).json({ success: false, message: "make is required" });
+  }
+
+  const rows = await InverterModel.find({ makeKey: parsedMake.key }).select("name").sort({ name: 1 }).lean();
+  const models = (rows || []).map((r: any) => String(r?.name || "").trim()).filter(Boolean);
+  res.json({ success: true, data: models });
+});
+
+// @desc    Add inverter model to dropdown list for a make (admin/sales)
+// @route   POST /api/settings/inverter-models
+export const addInverterModel = asyncHandler(async (req: any, res: any) => {
+  const roleName = String(req.user?.role?.name || "").toUpperCase();
+  if (roleName !== "ADMIN" && roleName !== "SALES") {
+    return res.status(403).json({ success: false, message: "Access denied." });
+  }
+
+  const parsedMake = normalizeBrandName(req.body?.make || req.body?.inverterMake);
+  if (!parsedMake) {
+    return res.status(400).json({ success: false, message: "make is required" });
+  }
+  if (parsedMake.name.length > 80) {
+    return res.status(400).json({ success: false, message: "Make name too long" });
+  }
+
+  const parsedModel = normalizeModelName(req.body?.name || req.body?.model || req.body?.inverterModel);
+  if (!parsedModel) {
+    return res.status(400).json({ success: false, message: "Model name is required" });
+  }
+  if (parsedModel.name.length > 80) {
+    return res.status(400).json({ success: false, message: "Model name too long" });
+  }
+
+  const doc = await InverterModel.findOneAndUpdate(
+    { makeKey: parsedMake.key, key: parsedModel.key },
+    {
+      $setOnInsert: {
+        make: parsedMake.name,
+        makeKey: parsedMake.key,
+        name: parsedModel.name,
+        key: parsedModel.key,
+        createdBy: req.user?._id,
+      },
+    },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  res.status(201).json({ success: true, data: { name: doc?.name || parsedModel.name } });
 });
 
 // @desc    List inverter capacities (for dropdown)

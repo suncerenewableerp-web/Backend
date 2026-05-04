@@ -36,3 +36,18 @@ export const installationDocumentUpload = multer({
     cb(null, true);
   },
 });
+
+export const dispatchProofUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || "").toLowerCase();
+    if (mime !== "application/pdf") {
+      const err: any = new Error("Only PDF uploads are allowed.");
+      err.statusCode = 400;
+      cb(err);
+      return;
+    }
+    cb(null, true);
+  },
+});

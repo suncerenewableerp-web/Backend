@@ -5,6 +5,7 @@ import {
   addCustomerCompany,
   addInverterCapacity,
   addInverterBrand,
+  addInverterModel,
   addJobCardEngineerName,
   addJobCardRepairActionName,
   deleteCustomerCompany,
@@ -18,6 +19,7 @@ import {
   listJobCardEngineerNames,
   listJobCardRepairActionNames,
   listInverterBrands,
+  listInverterModels,
   updateSlaSettings,
   updateJobCardRepairActionName,
 } from "../controllers/settings.controller";
@@ -40,6 +42,9 @@ router.delete('/customer-companies/:key', authorize('tickets', 'edit'), asyncHan
 router.get('/inverter-capacities', authorize('tickets', 'view'), asyncHandler(listInverterCapacities));
 router.post('/inverter-capacities', authorize('tickets', 'edit'), asyncHandler(addInverterCapacity));
 router.delete('/inverter-capacities/:key', authorize('tickets', 'edit'), asyncHandler(deleteInverterCapacity));
+
+router.get('/inverter-models', authorize('tickets', 'view'), asyncHandler(listInverterModels));
+router.post('/inverter-models', authorize('tickets', 'edit'), asyncHandler(addInverterModel));
 
 router.get('/jobcard-engineers', authorize('tickets', 'view'), asyncHandler(listJobCardEngineerNames));
 router.post('/jobcard-engineers', authorize('tickets', 'edit'), asyncHandler(addJobCardEngineerName));

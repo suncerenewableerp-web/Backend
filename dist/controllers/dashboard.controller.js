@@ -81,7 +81,7 @@ function formatDayKeyInTz(d, tz) {
 // @route   GET /api/dashboard/ticket-trends?days=14&tz=Asia/Kolkata
 exports.getTicketTrends = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const daysRaw = toPositiveInt(req.query?.days);
-    const days = Math.min(90, Math.max(7, daysRaw || 14));
+    const days = Math.min(365, Math.max(7, daysRaw || 14));
     const tz = safeTz(req.query?.tz);
     // Use a generous start window to avoid timezone edge misses near midnight.
     const start = new Date(Date.now() - (days + 1) * 24 * 60 * 60 * 1000);

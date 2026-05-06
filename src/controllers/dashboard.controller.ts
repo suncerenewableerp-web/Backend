@@ -1,4 +1,5 @@
 import Ticket from "../models/Ticket.model";
+import JobCard from "../models/JobCard.model";
 import { asyncHandler } from "../middleware/error.middleware";
 
 function toPositiveInt(v: any) {
@@ -88,6 +89,17 @@ export const getTicketTrends = asyncHandler(async (req: any, res: any) => {
 
   const scope = ticketScopeQuery(req.user);
 
+  const prefixMongoQuery = (q: any, prefix: string): any => {
+    if (!q || typeof q !== "object") return q;
+    if (Array.isArray(q)) return q.map((x) => prefixMongoQuery(x, prefix));
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(q)) {
+      if (k.startsWith("$")) out[k] = prefixMongoQuery(v, prefix);
+      else out[`${prefix}${k}`] = prefixMongoQuery(v, prefix);
+    }
+    return out;
+  };
+
   const createdRows: Array<{ _id: string; count: number }> = await Ticket.aggregate([
     { $match: { ...scope, createdAt: { $gte: start } } },
     {
@@ -127,18 +139,46 @@ export const getTicketTrends = asyncHandler(async (req: any, res: any) => {
     },
   ]);
 
+  const repairedRows: Array<{ _id: string; count: number }> = await JobCard.aggregate([
+    {
+      $match: {
+        engineerFinalStatus: "REPAIRABLE",
+        engineerFinalizedAt: { $type: "date", $gte: start },
+      },
+    },
+    {
+      $lookup: {
+        from: "tickets",
+        localField: "ticket",
+        foreignField: "_id",
+        as: "ticketDoc",
+      },
+    },
+    { $unwind: "$ticketDoc" },
+    Object.keys(scope || {}).length ? { $match: prefixMongoQuery(scope, "ticketDoc.") } : { $match: {} },
+    {
+      $group: {
+        _id: { $dateToString: { format: "%Y-%m-%d", date: "$engineerFinalizedAt", timezone: tz } },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
   const createdMap = new Map<string, number>();
   (createdRows || []).forEach((r) => createdMap.set(String(r._id || ""), Number(r.count || 0)));
   const closedMap = new Map<string, number>();
   (closedRows || []).forEach((r) => closedMap.set(String(r._id || ""), Number(r.count || 0)));
+  const repairedMap = new Map<string, number>();
+  (repairedRows || []).forEach((r) => repairedMap.set(String(r._id || ""), Number(r.count || 0)));
 
-  const series: Array<{ date: string; created: number; closed: number }> = [];
+  const series: Array<{ date: string; created: number; closed: number; repaired: number }> = [];
   for (let i = days - 1; i >= 0; i -= 1) {
     const key = formatDayKeyInTz(new Date(Date.now() - i * 24 * 60 * 60 * 1000), tz);
     series.push({
       date: key,
       created: createdMap.get(key) || 0,
       closed: closedMap.get(key) || 0,
+      repaired: repairedMap.get(key) || 0,
     });
   }
 

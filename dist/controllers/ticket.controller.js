@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketInstallationDocument = exports.getTicketInstallationDocuments = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.approveInstallationDone = exports.upsertOnsiteJobCard = exports.assignOnsiteBooking = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
+exports.deleteTicket = exports.updateTicketJobCard = exports.getTicketJobCard = exports.uploadTicketInstallationDocument = exports.getTicketInstallationDocuments = exports.uploadTicketPickupDocument = exports.upsertTicketPickupDetails = exports.getTicketPickupDetails = exports.approveInstallationDone = exports.upsertOnsiteJobCard = exports.assignOnsiteBooking = exports.updateTicket = exports.getTicket = exports.createTicketsBulk = exports.createTicket = exports.getTickets = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
@@ -1322,3 +1322,40 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
     res.status(created ? 201 : 200).json({ success: true, data: jobcard });
 });
 // named exports above
+// @desc    Delete ticket (admin-only) with typed confirmation
+// @route   DELETE /api/tickets/:id
+exports.deleteTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const confirmId = String(req.body?.confirmId || "").trim();
+    if (!confirmId) {
+        return res.status(400).json({ success: false, message: "confirmId is required" });
+    }
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+        .select("_id ticketId jobCard logistics")
+        .lean();
+    if (!ticket)
+        return res.status(404).json({ success: false, message: "Ticket not found" });
+    const dbId = String(ticket._id);
+    const displayId = String(ticket.ticketId || "").trim();
+    const matchesDbId = confirmId === dbId;
+    const matchesDisplayId = displayId ? confirmId.toUpperCase() === displayId.toUpperCase() : false;
+    if (!matchesDbId && !matchesDisplayId) {
+        return res.status(400).json({
+            success: false,
+            message: "Confirmation ID does not match this ticket.",
+        });
+    }
+    await Promise.all([
+        JobCard_model_1.default.deleteMany({ ticket: ticket._id }),
+        Logistics_model_1.default.deleteMany({ ticket: ticket._id }),
+    ]);
+    await Ticket_model_1.default.deleteOne({ _id: ticket._id });
+    res.json({
+        success: true,
+        message: `Ticket ${displayId || dbId} deleted`,
+        data: { id: dbId, ticketId: displayId || undefined },
+    });
+});

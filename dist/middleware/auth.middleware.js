@@ -43,7 +43,7 @@ const authorize = (module, action) => {
         // Business rule: SALES should have ADMIN-like access for tickets and logistics
         // (except delete), so they can schedule pickup/dispatch and manage ticket flow.
         if (roleName === "SALES") {
-            if (module === "tickets")
+            if (module === "tickets" && action !== "delete")
                 return next();
             if (module === "logistics" && action !== "delete")
                 return next();

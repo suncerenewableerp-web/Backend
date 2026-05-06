@@ -26,6 +26,7 @@ router.get('/:id/jobcard', (0, auth_middleware_1.authorize)('jobcard', 'view'), 
 router.put('/:id/jobcard', (0, auth_middleware_1.authorize)('jobcard', 'edit'), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId]), (0, error_middleware_1.asyncHandler)(ticket_controller_1.updateTicketJobCard));
 router.get('/:id', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId]), (0, error_middleware_1.asyncHandler)(ticket_controller_1.getTicket));
 router.put('/:id', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId]), (0, error_middleware_1.asyncHandler)(ticket_controller_1.updateTicket));
+router.delete("/:id", (0, auth_middleware_1.authorize)("tickets", "delete"), (0, validate_middleware_1.validate)([validate_middleware_1.validateTicketId, validate_middleware_1.validateTicketDeleteConfirmId]), (0, error_middleware_1.asyncHandler)(ticket_controller_1.deleteTicket));
 router.patch('/:id/assign', (0, auth_middleware_1.authorize)('tickets', 'edit'), (0, error_middleware_1.asyncHandler)((req, res) => res.json({ success: true, message: 'Assigned' }))); // Stub
 router.get('/:id/history', (0, auth_middleware_1.authorize)('tickets', 'view'), (0, error_middleware_1.asyncHandler)((req, res) => {
     // History logic

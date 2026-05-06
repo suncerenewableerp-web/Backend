@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getTicketTrends = exports.getDashboard = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
+const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 function toPositiveInt(v) {
     const n = typeof v === "number" ? v : Number.parseInt(String(v || ""), 10);
@@ -86,6 +87,20 @@ exports.getTicketTrends = (0, error_middleware_1.asyncHandler)(async (req, res) 
     // Use a generous start window to avoid timezone edge misses near midnight.
     const start = new Date(Date.now() - (days + 1) * 24 * 60 * 60 * 1000);
     const scope = ticketScopeQuery(req.user);
+    const prefixMongoQuery = (q, prefix) => {
+        if (!q || typeof q !== "object")
+            return q;
+        if (Array.isArray(q))
+            return q.map((x) => prefixMongoQuery(x, prefix));
+        const out = {};
+        for (const [k, v] of Object.entries(q)) {
+            if (k.startsWith("$"))
+                out[k] = prefixMongoQuery(v, prefix);
+            else
+                out[`${prefix}${k}`] = prefixMongoQuery(v, prefix);
+        }
+        return out;
+    };
     const createdRows = await Ticket_model_1.default.aggregate([
         { $match: { ...scope, createdAt: { $gte: start } } },
         {
@@ -123,10 +138,36 @@ exports.getTicketTrends = (0, error_middleware_1.asyncHandler)(async (req, res) 
             },
         },
     ]);
+    const repairedRows = await JobCard_model_1.default.aggregate([
+        {
+            $match: {
+                engineerFinalStatus: "REPAIRABLE",
+                engineerFinalizedAt: { $type: "date", $gte: start },
+            },
+        },
+        {
+            $lookup: {
+                from: "tickets",
+                localField: "ticket",
+                foreignField: "_id",
+                as: "ticketDoc",
+            },
+        },
+        { $unwind: "$ticketDoc" },
+        Object.keys(scope || {}).length ? { $match: prefixMongoQuery(scope, "ticketDoc.") } : { $match: {} },
+        {
+            $group: {
+                _id: { $dateToString: { format: "%Y-%m-%d", date: "$engineerFinalizedAt", timezone: tz } },
+                count: { $sum: 1 },
+            },
+        },
+    ]);
     const createdMap = new Map();
     (createdRows || []).forEach((r) => createdMap.set(String(r._id || ""), Number(r.count || 0)));
     const closedMap = new Map();
     (closedRows || []).forEach((r) => closedMap.set(String(r._id || ""), Number(r.count || 0)));
+    const repairedMap = new Map();
+    (repairedRows || []).forEach((r) => repairedMap.set(String(r._id || ""), Number(r.count || 0)));
     const series = [];
     for (let i = days - 1; i >= 0; i -= 1) {
         const key = formatDayKeyInTz(new Date(Date.now() - i * 24 * 60 * 60 * 1000), tz);
@@ -134,6 +175,7 @@ exports.getTicketTrends = (0, error_middleware_1.asyncHandler)(async (req, res) 
             date: key,
             created: createdMap.get(key) || 0,
             closed: closedMap.get(key) || 0,
+            repaired: repairedMap.get(key) || 0,
         });
     }
     res.json({ success: true, data: { days, tz, series } });

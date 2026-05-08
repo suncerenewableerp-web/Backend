@@ -689,6 +689,12 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
 
   if (Object.prototype.hasOwnProperty.call(body, 'status')) {
     const nextFlow = normalizeFlowStatus(body.status);
+    if (roleNorm === "ENGINEER" && isOnsite && nextFlow === "CLOSED") {
+      return res.status(403).json({
+        success: false,
+        message: "Engineers cannot close on-site (offline booking) tickets. Please mark as done and ask Admin/Sales to close.",
+      });
+    }
     if (isOnsite) {
       const allowed = new Set(["CREATED", "UNDER_REPAIRED", "CLOSED"]);
       if (!allowed.has(nextFlow)) {
@@ -696,6 +702,15 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
           success: false,
           message: "Invalid status for on-site (offline booking) tickets.",
         });
+      }
+      if (nextFlow === "CLOSED") {
+        const markedDoneAt = (ticket as any)?.onsite?.markedRepairedAt;
+        if (!markedDoneAt) {
+          return res.status(400).json({
+            success: false,
+            message: "Please wait for the engineer to mark this offline booking as done before closing it.",
+          });
+        }
       }
       if (prevFlow === "CLOSED" && nextFlow !== "CLOSED") {
         return res.status(400).json({ success: false, message: "Closed tickets cannot be reopened." });
@@ -914,7 +929,7 @@ export const assignOnsiteBooking = asyncHandler(async (req: any, res: any) => {
   res.status(200).json({ success: true, data: ticket });
 });
 
-// @desc    Save on-site (offline booking) engineer job details and optionally close ticket
+// @desc    Save on-site (offline booking) engineer job details and optionally mark as done
 // @route   PUT /api/tickets/:id/onsite/jobcard
 export const upsertOnsiteJobCard = asyncHandler(async (req: any, res: any) => {
   const roleNorm = String(req.user?.role?.name || "").trim().toUpperCase();
@@ -953,6 +968,9 @@ export const upsertOnsiteJobCard = asyncHandler(async (req: any, res: any) => {
   const markRepaired = Boolean(req.body?.markRepaired);
 
   (ticket as any).onsite = (ticket as any).onsite || {};
+  if (markRepaired && (ticket as any).onsite.markedRepairedAt) {
+    return res.status(400).json({ success: false, message: "This ticket is already marked as done." });
+  }
   (ticket as any).onsite.engineerName =
     engineerName || String(req.user?.name || "").trim() || (ticket as any).onsite.engineerName;
   if (visitDate) (ticket as any).onsite.visitDate = visitDate;
@@ -961,8 +979,7 @@ export const upsertOnsiteJobCard = asyncHandler(async (req: any, res: any) => {
   if (markRepaired) {
     (ticket as any).onsite.markedRepairedAt = new Date();
     (ticket as any).onsite.markedRepairedBy = req.user?._id;
-    ticket.status = "CLOSED";
-    ticket.statusHistory.push({ status: "CLOSED", changedBy: req.user._id });
+    // Engineers only "mark as done" for offline bookings; Admin/Sales will close the ticket after verification.
   }
 
   await ticket.save();

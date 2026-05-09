@@ -369,11 +369,11 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
         logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
     }
     const readyForApproval = Boolean(logistics?.billing?.invoiceGenerated) && Boolean(logistics?.billing?.paymentDone);
-    const hasProof = Boolean(logistics?.billing?.proofDocument?.url);
-    if (!readyForApproval || !hasProof) {
+    // Billing proof PDF (invoice upload) is optional for Admin approval.
+    if (!readyForApproval) {
         return res.status(400).json({
             success: false,
-            message: "Invoice, payment and billing proof PDF are required before approving dispatch.",
+            message: "Invoice and payment flags are required before approving dispatch.",
         });
     }
     logistics.billing = logistics.billing || {};

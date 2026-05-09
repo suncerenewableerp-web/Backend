@@ -418,11 +418,11 @@ export const approveDispatch = asyncHandler(async (req: any, res: any) => {
   }
   const readyForApproval =
     Boolean(logistics?.billing?.invoiceGenerated) && Boolean(logistics?.billing?.paymentDone);
-  const hasProof = Boolean(logistics?.billing?.proofDocument?.url);
-  if (!readyForApproval || !hasProof) {
+  // Billing proof PDF (invoice upload) is optional for Admin approval.
+  if (!readyForApproval) {
     return res.status(400).json({
       success: false,
-      message: "Invoice, payment and billing proof PDF are required before approving dispatch.",
+      message: "Invoice and payment flags are required before approving dispatch.",
     });
   }
   logistics.billing = logistics.billing || {};

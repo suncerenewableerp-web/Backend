@@ -368,14 +368,7 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
     if (!logistics) {
         logistics = new Logistics_model_1.default({ ticket: ticket._id, type: "DELIVERY" });
     }
-    const readyForApproval = Boolean(logistics?.billing?.invoiceGenerated) && Boolean(logistics?.billing?.paymentDone);
-    // Billing proof PDF (invoice upload) is optional for Admin approval.
-    if (!readyForApproval) {
-        return res.status(400).json({
-            success: false,
-            message: "Invoice and payment flags are required before approving dispatch.",
-        });
-    }
+    // For Admin, nothing is mandatory for approval (remark/proof/flags).
     logistics.billing = logistics.billing || {};
     logistics.billing.dispatchApproved = true;
     logistics.billing.dispatchApprovedAt = new Date();
@@ -395,7 +388,7 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
         },
     });
 });
-// @desc    Admin rejects dispatch request for a ticket (requires remark)
+// @desc    Admin rejects dispatch request for a ticket (remark optional)
 // @route   POST /api/logistics/reject-dispatch
 exports.rejectDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").toUpperCase();
@@ -407,9 +400,6 @@ exports.rejectDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) =
         return res.status(400).json({ success: false, message: "ticketId is required" });
     }
     const remark = normalizeRemark(req.body?.remark);
-    if (!remark) {
-        return res.status(400).json({ success: false, message: "remark is required" });
-    }
     const ticket = await Ticket_model_1.default.findById(ticketId);
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
@@ -420,9 +410,6 @@ exports.rejectDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) =
     logistics.billing = logistics.billing || {};
     if (Boolean(logistics.billing.dispatchApproved)) {
         return res.status(400).json({ success: false, message: "Dispatch is already approved." });
-    }
-    if (!logistics.billing.dispatchApprovalRequestedAt) {
-        return res.status(400).json({ success: false, message: "No pending dispatch approval request." });
     }
     logistics.billing.dispatchRejected = true;
     logistics.billing.dispatchRejectedAt = new Date();

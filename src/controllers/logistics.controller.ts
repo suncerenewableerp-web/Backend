@@ -416,15 +416,7 @@ export const approveDispatch = asyncHandler(async (req: any, res: any) => {
   if (!logistics) {
     logistics = new Logistics({ ticket: ticket._id, type: "DELIVERY" });
   }
-  const readyForApproval =
-    Boolean(logistics?.billing?.invoiceGenerated) && Boolean(logistics?.billing?.paymentDone);
-  // Billing proof PDF (invoice upload) is optional for Admin approval.
-  if (!readyForApproval) {
-    return res.status(400).json({
-      success: false,
-      message: "Invoice and payment flags are required before approving dispatch.",
-    });
-  }
+  // For Admin, nothing is mandatory for approval (remark/proof/flags).
   logistics.billing = logistics.billing || {};
   logistics.billing.dispatchApproved = true;
   logistics.billing.dispatchApprovedAt = new Date();
@@ -447,7 +439,7 @@ export const approveDispatch = asyncHandler(async (req: any, res: any) => {
   });
 });
 
-// @desc    Admin rejects dispatch request for a ticket (requires remark)
+// @desc    Admin rejects dispatch request for a ticket (remark optional)
 // @route   POST /api/logistics/reject-dispatch
 export const rejectDispatch = asyncHandler(async (req: any, res: any) => {
   const roleName = String(req.user?.role?.name || "").toUpperCase();
@@ -460,9 +452,6 @@ export const rejectDispatch = asyncHandler(async (req: any, res: any) => {
     return res.status(400).json({ success: false, message: "ticketId is required" });
   }
   const remark = normalizeRemark(req.body?.remark);
-  if (!remark) {
-    return res.status(400).json({ success: false, message: "remark is required" });
-  }
 
   const ticket = await Ticket.findById(ticketId);
   if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
@@ -475,9 +464,6 @@ export const rejectDispatch = asyncHandler(async (req: any, res: any) => {
   logistics.billing = logistics.billing || {};
   if (Boolean(logistics.billing.dispatchApproved)) {
     return res.status(400).json({ success: false, message: "Dispatch is already approved." });
-  }
-  if (!logistics.billing.dispatchApprovalRequestedAt) {
-    return res.status(400).json({ success: false, message: "No pending dispatch approval request." });
   }
 
   logistics.billing.dispatchRejected = true;

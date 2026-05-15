@@ -3,8 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.addPart = exports.createJobCard = exports.getJobCards = void 0;
+exports.deleteJobCard = exports.addPart = exports.createJobCard = exports.getJobCards = void 0;
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
+const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 // @desc    Get jobcards
 // @route   GET /api/jobcards
@@ -39,4 +40,24 @@ exports.addPart = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         }
     }, { new: true });
     res.json({ success: true, data: jobcard });
+});
+// @desc    Delete jobcard (admin-only)
+// @route   DELETE /api/jobcards/:id
+exports.deleteJobCard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
+    const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
+    if (roleName !== "ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied." });
+    }
+    const id = String(req.params?.id || "").trim();
+    if (!id)
+        return res.status(400).json({ success: false, message: "id is required" });
+    const jobcard = await JobCard_model_1.default.findById(id).select("_id ticket").lean();
+    if (!jobcard)
+        return res.status(404).json({ success: false, message: "Job card not found" });
+    const ticketId = String(jobcard.ticket || "");
+    await JobCard_model_1.default.deleteOne({ _id: jobcard._id });
+    if (ticketId) {
+        await Ticket_model_1.default.updateOne({ _id: ticketId, jobCard: jobcard._id }, { $unset: { jobCard: 1 } }).catch(() => { });
+    }
+    res.json({ success: true, message: "Job card deleted", data: { id: String(jobcard._id) } });
 });

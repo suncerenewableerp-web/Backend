@@ -243,10 +243,11 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
     const paymentDone = hasOwn(req.body, "paymentDone") ? toBoolOrNull(req.body?.paymentDone) : null;
     const hasRemark = hasOwn(req.body, "remark");
     const remark = hasRemark ? normalizeRemark(req.body?.remark) : "";
-    if (invoiceGenerated === null && paymentDone === null) {
+    const requestApproval = hasOwn(req.body, "requestApproval") ? toBoolOrNull(req.body?.requestApproval) : null;
+    if (invoiceGenerated === null && paymentDone === null && !hasRemark && requestApproval === null) {
         return res.status(400).json({
             success: false,
-            message: "At least one field is required: invoiceGenerated or paymentDone.",
+            message: "At least one field is required: invoiceGenerated, paymentDone, remark, or requestApproval.",
         });
     }
     const ticket = await Ticket_model_1.default.findById(ticketId);
@@ -283,13 +284,11 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
     const roleNorm = String(roleName || "").toUpperCase();
     const readyForApproval = Boolean(logistics.billing.invoiceGenerated) && Boolean(logistics.billing.paymentDone);
     const hasProof = Boolean(logistics?.billing?.proofDocument?.url);
-    const shouldRequestApproval = roleNorm === "SALES" && readyForApproval && hasProof && !Boolean(logistics.billing.dispatchApproved);
-    if (roleNorm === "SALES" && readyForApproval && !hasProof) {
-        return res.status(400).json({
-            success: false,
-            message: "Please upload billing proof PDF before requesting Admin approval.",
-        });
-    }
+    const wantsApproval = roleNorm === "SALES" && requestApproval === true && !Boolean(logistics.billing.dispatchApproved);
+    // Keep legacy auto-request behavior when billing is complete + proof is present.
+    const autoRequest = roleNorm === "SALES" && readyForApproval && hasProof && !Boolean(logistics.billing.dispatchApproved);
+    // Client requirement: allow Sales to request approval without mandatory criteria.
+    const shouldRequestApproval = wantsApproval || autoRequest;
     const wasRejected = Boolean(logistics?.billing?.dispatchRejected);
     const canRequestNow = shouldRequestApproval && (!logistics.billing.dispatchApprovalRequestedAt || wasRejected);
     const newlyRequested = canRequestNow && (!logistics.billing.dispatchApprovalRequestedAt || wasRejected);
@@ -303,6 +302,7 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
             logistics.billing.dispatchRejectedAt = undefined;
             logistics.billing.dispatchRejectedBy = undefined;
             logistics.billing.dispatchRejectionRemark = "";
+            logistics.billing.dispatchApprovalRemark = "";
         }
     }
     await logistics.save();
@@ -347,6 +347,7 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
             invoiceGenerated: Boolean(logistics?.billing?.invoiceGenerated),
             paymentDone: Boolean(logistics?.billing?.paymentDone),
             salesRemark: String(logistics?.billing?.salesRemark || ""),
+            dispatchApprovalRequestedAt: logistics?.billing?.dispatchApprovalRequestedAt || null,
         },
     });
 });
@@ -361,6 +362,7 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
     if (!ticketId) {
         return res.status(400).json({ success: false, message: "ticketId is required" });
     }
+    const remark = normalizeRemark(req.body?.remark);
     const ticket = await Ticket_model_1.default.findById(ticketId);
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
@@ -373,6 +375,7 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
     logistics.billing.dispatchApproved = true;
     logistics.billing.dispatchApprovedAt = new Date();
     logistics.billing.dispatchApprovedBy = req.user?._id;
+    logistics.billing.dispatchApprovalRemark = remark;
     logistics.billing.dispatchRejected = false;
     logistics.billing.dispatchRejectedAt = undefined;
     logistics.billing.dispatchRejectedBy = undefined;
@@ -492,17 +495,22 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
 // @route   GET /api/logistics/pending-dispatch-approvals
 exports.getPendingDispatchApprovals = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").toUpperCase();
-    if (roleName !== "ADMIN") {
+    if (roleName !== "ADMIN" && roleName !== "SALES") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
-    const rows = await Logistics_model_1.default.find({
+    const baseQuery = {
         type: "DELIVERY",
         "billing.dispatchApprovalRequestedAt": { $exists: true, $ne: null },
         $and: [
             { $or: [{ "billing.dispatchRejected": { $exists: false } }, { "billing.dispatchRejected": false }] },
             { $or: [{ "billing.dispatchApproved": { $exists: false } }, { "billing.dispatchApproved": false }] },
         ],
-    })
+    };
+    // For Sales, show only their own approval requests (so they can track what they forwarded).
+    if (roleName === "SALES" && req.user?._id) {
+        baseQuery["billing.dispatchApprovalRequestedBy"] = req.user._id;
+    }
+    const rows = await Logistics_model_1.default.find(baseQuery)
         .populate("ticket", "ticketId status customer createdAt")
         .sort({ "billing.dispatchApprovalRequestedAt": -1, updatedAt: -1 })
         .limit(500);

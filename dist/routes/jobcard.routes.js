@@ -13,4 +13,5 @@ router.use((0, auth_middleware_1.authorize)('jobcard', 'view'));
 router.get('/', (0, error_middleware_1.asyncHandler)(jobcard_controller_1.getJobCards));
 router.post('/', (0, auth_middleware_1.authorize)('jobcard', 'create'), (0, error_middleware_1.asyncHandler)(jobcard_controller_1.createJobCard));
 router.post('/:id/parts', (0, auth_middleware_1.authorize)('jobcard', 'edit'), (0, error_middleware_1.asyncHandler)(jobcard_controller_1.addPart));
+router.delete('/:id', (0, auth_middleware_1.authorize)('jobcard', 'delete'), (0, error_middleware_1.asyncHandler)(jobcard_controller_1.deleteJobCard));
 exports.default = router;

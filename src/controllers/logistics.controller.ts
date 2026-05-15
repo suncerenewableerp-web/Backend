@@ -270,11 +270,12 @@ export const saveUnderDispatch = asyncHandler(async (req: any, res: any) => {
   const paymentDone = hasOwn(req.body, "paymentDone") ? toBoolOrNull(req.body?.paymentDone) : null;
   const hasRemark = hasOwn(req.body, "remark");
   const remark = hasRemark ? normalizeRemark(req.body?.remark) : "";
+  const requestApproval = hasOwn(req.body, "requestApproval") ? toBoolOrNull(req.body?.requestApproval) : null;
 
-  if (invoiceGenerated === null && paymentDone === null) {
+  if (invoiceGenerated === null && paymentDone === null && !hasRemark && requestApproval === null) {
     return res.status(400).json({
       success: false,
-      message: "At least one field is required: invoiceGenerated or paymentDone.",
+      message: "At least one field is required: invoiceGenerated, paymentDone, remark, or requestApproval.",
     });
   }
 
@@ -312,14 +313,11 @@ export const saveUnderDispatch = asyncHandler(async (req: any, res: any) => {
   const readyForApproval =
     Boolean(logistics.billing.invoiceGenerated) && Boolean(logistics.billing.paymentDone);
   const hasProof = Boolean(logistics?.billing?.proofDocument?.url);
-  const shouldRequestApproval =
-    roleNorm === "SALES" && readyForApproval && hasProof && !Boolean(logistics.billing.dispatchApproved);
-  if (roleNorm === "SALES" && readyForApproval && !hasProof) {
-    return res.status(400).json({
-      success: false,
-      message: "Please upload billing proof PDF before requesting Admin approval.",
-    });
-  }
+  const wantsApproval = roleNorm === "SALES" && requestApproval === true && !Boolean(logistics.billing.dispatchApproved);
+  // Keep legacy auto-request behavior when billing is complete + proof is present.
+  const autoRequest = roleNorm === "SALES" && readyForApproval && hasProof && !Boolean(logistics.billing.dispatchApproved);
+  // Client requirement: allow Sales to request approval without mandatory criteria.
+  const shouldRequestApproval = wantsApproval || autoRequest;
   const wasRejected = Boolean(logistics?.billing?.dispatchRejected);
   const canRequestNow = shouldRequestApproval && (!logistics.billing.dispatchApprovalRequestedAt || wasRejected);
   const newlyRequested = canRequestNow && (!logistics.billing.dispatchApprovalRequestedAt || wasRejected);
@@ -333,6 +331,7 @@ export const saveUnderDispatch = asyncHandler(async (req: any, res: any) => {
       logistics.billing.dispatchRejectedAt = undefined;
       logistics.billing.dispatchRejectedBy = undefined;
       logistics.billing.dispatchRejectionRemark = "";
+      logistics.billing.dispatchApprovalRemark = "";
     }
   }
   await logistics.save();
@@ -392,6 +391,7 @@ export const saveUnderDispatch = asyncHandler(async (req: any, res: any) => {
       invoiceGenerated: Boolean(logistics?.billing?.invoiceGenerated),
       paymentDone: Boolean(logistics?.billing?.paymentDone),
       salesRemark: String(logistics?.billing?.salesRemark || ""),
+      dispatchApprovalRequestedAt: logistics?.billing?.dispatchApprovalRequestedAt || null,
     },
   });
 });
@@ -408,6 +408,7 @@ export const approveDispatch = asyncHandler(async (req: any, res: any) => {
   if (!ticketId) {
     return res.status(400).json({ success: false, message: "ticketId is required" });
   }
+  const remark = normalizeRemark(req.body?.remark);
 
   const ticket = await Ticket.findById(ticketId);
   if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
@@ -421,6 +422,7 @@ export const approveDispatch = asyncHandler(async (req: any, res: any) => {
   logistics.billing.dispatchApproved = true;
   logistics.billing.dispatchApprovedAt = new Date();
   logistics.billing.dispatchApprovedBy = req.user?._id;
+  logistics.billing.dispatchApprovalRemark = remark;
   logistics.billing.dispatchRejected = false;
   logistics.billing.dispatchRejectedAt = undefined;
   logistics.billing.dispatchRejectedBy = undefined;
@@ -562,18 +564,24 @@ export const scheduleDispatch = asyncHandler(async (req: any, res: any) => {
 // @route   GET /api/logistics/pending-dispatch-approvals
 export const getPendingDispatchApprovals = asyncHandler(async (req: any, res: any) => {
   const roleName = String(req.user?.role?.name || "").toUpperCase();
-  if (roleName !== "ADMIN") {
+  if (roleName !== "ADMIN" && roleName !== "SALES") {
     return res.status(403).json({ success: false, message: "Access denied." });
   }
 
-  const rows: any[] = await Logistics.find({
+  const baseQuery: Record<string, any> = {
     type: "DELIVERY",
     "billing.dispatchApprovalRequestedAt": { $exists: true, $ne: null },
     $and: [
       { $or: [{ "billing.dispatchRejected": { $exists: false } }, { "billing.dispatchRejected": false }] },
       { $or: [{ "billing.dispatchApproved": { $exists: false } }, { "billing.dispatchApproved": false }] },
     ],
-  })
+  };
+  // For Sales, show only their own approval requests (so they can track what they forwarded).
+  if (roleName === "SALES" && req.user?._id) {
+    baseQuery["billing.dispatchApprovalRequestedBy"] = req.user._id;
+  }
+
+  const rows: any[] = await Logistics.find(baseQuery)
     .populate("ticket", "ticketId status customer createdAt")
     .sort({ "billing.dispatchApprovalRequestedAt": -1, updatedAt: -1 })
     .limit(500);

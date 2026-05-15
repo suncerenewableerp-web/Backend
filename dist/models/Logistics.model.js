@@ -58,6 +58,7 @@ const logisticsSchema = new mongoose_1.default.Schema({
         dispatchApproved: { type: Boolean, default: false },
         dispatchApprovedAt: Date,
         dispatchApprovedBy: { type: mongoose_1.default.Schema.ObjectId, ref: "User" },
+        dispatchApprovalRemark: { type: String, default: "" },
         dispatchRejected: { type: Boolean, default: false },
         dispatchRejectedAt: Date,
         dispatchRejectedBy: { type: mongoose_1.default.Schema.ObjectId, ref: "User" },

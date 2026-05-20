@@ -5,6 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const mongoose_1 = __importDefault(require("mongoose"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
+function isBcryptHash(v) {
+    return typeof v === "string" && /^\$2[aby]\$/.test(v);
+}
 const userSchema = new mongoose_1.default.Schema({
     name: {
         type: String,
@@ -59,6 +62,19 @@ userSchema.pre('save', async function (next) {
 });
 // Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
-    return await bcryptjs_1.default.compare(candidatePassword, this.password);
+    const stored = this.password;
+    if (stored === undefined || stored === null)
+        return false;
+    const candidate = String(candidatePassword ?? "");
+    // Legacy compatibility: if password was inserted without hashing (e.g., via `insertMany()`),
+    // treat it as plaintext for comparison.
+    if (!isBcryptHash(stored))
+        return candidate === String(stored);
+    try {
+        return await bcryptjs_1.default.compare(candidate, stored);
+    }
+    catch {
+        return false;
+    }
 };
 exports.default = mongoose_1.default.model("User", userSchema);

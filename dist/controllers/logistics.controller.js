@@ -206,10 +206,22 @@ exports.uploadUnderDispatchProof = (0, error_middleware_1.asyncHandler)(async (r
     if (hasRemark)
         logistics.billing.salesRemark = remark;
     // New proof upload means Sales can re-request approval; clear any previous rejection.
+    const wasRejected = Boolean(logistics?.billing?.dispatchRejected);
     logistics.billing.dispatchRejected = false;
     logistics.billing.dispatchRejectedAt = undefined;
     logistics.billing.dispatchRejectedBy = undefined;
     logistics.billing.dispatchRejectionRemark = "";
+    // Business expectation: when Sales uploads proof, treat it as "forwarded for approval"
+    // so it shows up in the Admin approval counter even if the user saved billing flags earlier.
+    if (roleNorm === "SALES" && !Boolean(logistics?.billing?.dispatchApproved)) {
+        if (!logistics.billing.dispatchApprovalRequestedAt || wasRejected) {
+            logistics.billing.dispatchApprovalRequestedAt = new Date();
+            logistics.billing.dispatchApprovalRequestedBy = req.user?._id;
+        }
+        if (wasRejected) {
+            logistics.billing.dispatchApprovalRemark = "";
+        }
+    }
     await logistics.save();
     ticket.logistics = logistics._id;
     await ticket.save().catch(() => { });

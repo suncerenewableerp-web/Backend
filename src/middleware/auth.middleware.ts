@@ -45,6 +45,9 @@ export const authorize = (module: string, action: string) => {
     const role = req.user?.role;
     const roleName = String(role?.name || "").trim().toUpperCase();
 
+    // ADMIN should never be blocked by RBAC misconfiguration.
+    if (roleName === "ADMIN") return next();
+
     // Business rule: SALES should have ADMIN-like access for tickets and logistics
     // (except delete), so they can schedule pickup/dispatch and manage ticket flow.
     if (roleName === "SALES") {

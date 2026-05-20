@@ -111,6 +111,7 @@ const roles = await Role.insertMany([
     name: "Sales Manager",
     email: "sales@sunce.in",
     password: "sales123",
+    phone: "+919876543211",
     role: roleByName.SALES._id,
     company: "Sunce Renewables",
   });
@@ -118,6 +119,7 @@ const roles = await Role.insertMany([
     name: "Field Engineer",
     email: "engineer@sunce.in",
     password: "engineer123",
+    phone: "+919876543212",
     role: roleByName.ENGINEER._id,
     company: "Sunce Renewables",
   });
@@ -125,6 +127,7 @@ const roles = await Role.insertMany([
     name: "John Doe",
     email: "customer@example.com",
     password: "customer123",
+    phone: "+919876543213",
     role: roleByName.CUSTOMER._id,
     company: "ABC Solar Pvt Ltd",
   });

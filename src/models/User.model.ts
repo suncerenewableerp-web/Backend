@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 
+function isBcryptHash(v: unknown): v is string {
+  return typeof v === "string" && /^\$2[aby]\$/.test(v);
+}
+
 const userSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -56,7 +60,20 @@ userSchema.pre('save', async function(next) {
 
 // Compare password method
 userSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+  const stored = this.password;
+  if (stored === undefined || stored === null) return false;
+
+  const candidate = String(candidatePassword ?? "");
+
+  // Legacy compatibility: if password was inserted without hashing (e.g., via `insertMany()`),
+  // treat it as plaintext for comparison.
+  if (!isBcryptHash(stored)) return candidate === String(stored);
+
+  try {
+    return await bcrypt.compare(candidate, stored);
+  } catch {
+    return false;
+  }
 };
 
 export default mongoose.model("User", userSchema);

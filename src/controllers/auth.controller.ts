@@ -97,11 +97,20 @@ export const login = asyncHandler(async (req: any, res: any) => {
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
   }
 
+  // If this user was created via a legacy seed/insert that bypassed hashing, upgrade on successful login.
+  const storedPassword = String(user.password || "");
+  if (!/^\$2[aby]\$/.test(storedPassword)) {
+    user.password = String(password ?? "");
+    await user.save();
+  }
+
   const { accessToken, refreshToken } = generateTokens(user._id);
+  const userSafe = user.toObject();
+  delete userSafe.password;
 
   res.json({
     success: true,
-    data: { user, accessToken, refreshToken, role: user.role }
+    data: { user: userSafe, accessToken, refreshToken, role: user.role }
   });
 });
 

@@ -66,7 +66,8 @@ const seed = async () => {
     ]);
 
     // 2. Create 5 Users (matching README demo creds)
-    const users = await User.insertMany([
+    // Use `create()` (not `insertMany()`) so password hashing middleware runs.
+    const users = await User.create([
       {
         name: 'Admin User',
         email: 'admin@sunce.in',
@@ -79,6 +80,7 @@ const seed = async () => {
         name: 'Sales Manager',
         email: 'sales@sunce.in',
         password: 'sales123',
+        phone: '+919876543211',
         role: roles[1]._id, // SALES
         company: 'Sunce Renewables'
       },
@@ -86,6 +88,7 @@ const seed = async () => {
         name: 'Field Engineer',
         email: 'engineer@sunce.in',
         password: 'engineer123',
+        phone: '+919876543212',
         role: roles[2]._id, // ENGINEER
         company: 'Sunce Renewables'
       },
@@ -93,6 +96,7 @@ const seed = async () => {
         name: 'John Doe',
         email: 'customer@example.com',
         password: 'customer123',
+        phone: '+919876543213',
         role: roles[3]._id, // CUSTOMER
         company: 'ABC Solar Pvt Ltd'
       },
@@ -100,7 +104,8 @@ const seed = async () => {
         name: 'Test User',
         email: 'test@sunce.in',
         password: 'test123',
-        role: roles[0]._id // ADMIN
+        phone: '+919876543214',
+        role: roles[0]._id, // ADMIN
       }
     ]);
 

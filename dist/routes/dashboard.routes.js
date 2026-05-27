@@ -12,4 +12,6 @@ router.use(auth_middleware_1.verifyToken);
 router.use((0, auth_middleware_1.authorize)('dashboard', 'view'));
 router.get('/', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getDashboard));
 router.get('/ticket-trends', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getTicketTrends));
+router.get('/servicing-status', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getServicingStatus));
+router.get('/client-details', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getClientDetails));
 exports.default = router;

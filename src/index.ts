@@ -21,6 +21,7 @@ import slaRoutes from "./routes/sla.routes";
 import settingsRoutes from "./routes/settings.routes";
 import reportRoutes from "./routes/report.routes";
 import dashboardRoutes from "./routes/dashboard.routes";
+import notificationRoutes from "./routes/notification.routes";
 
 // Import middleware (will create later)
 import { errorHandler } from "./middleware/error.middleware";
@@ -116,6 +117,7 @@ app.use("/api/sla", slaRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 // ─── 404 HANDLER ─────────────────────────────────────────────────────────────
 app.use("*", (req, res) => {

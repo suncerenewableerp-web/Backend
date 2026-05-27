@@ -1,7 +1,9 @@
 import Logistics from "../models/Logistics.model";
 import Ticket from "../models/Ticket.model";
+import JobCard from "../models/JobCard.model";
 import Role from "../models/Role.model";
 import User from "../models/User.model";
+import Notification from "../models/Notification.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { mapCloudinaryDocUrls, toCloudinaryPrivateDownloadUrl } from "../utils/cloudinaryDownloadUrl";
 import { cloudinary, ensureCloudinaryConfigured } from "../config/cloudinary";
@@ -64,6 +66,58 @@ function normalizeRemark(input: any): string {
   return raw.replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
+function toIdString(v: any): string {
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && (v as any)?._id) return String((v as any)._id);
+  return String(v);
+}
+
+async function getEngineerFinalStatusForTicket(ticket: any): Promise<string> {
+  const jobCardId = toIdString((ticket as any)?.jobCard);
+  if (!jobCardId) return "";
+  const jc: any = await JobCard.findById(jobCardId).select("engineerFinalStatus").lean();
+  return String(jc?.engineerFinalStatus || "").toUpperCase().trim();
+}
+
+function uniqIds(ids: any[]) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of ids || []) {
+    const s = toIdString(v).trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+async function safeCreateNotification(input: {
+  title: string;
+  message?: string;
+  kind?: string;
+  href?: string;
+  meta?: any;
+  targetRoles?: string[];
+  targetUsers?: any[];
+}) {
+  try {
+    const targetRoles = uniqIds((input.targetRoles || []).map((r) => String(r || "").trim().toUpperCase())).filter(Boolean);
+    const targetUsers = uniqIds(input.targetUsers || []);
+    await Notification.create({
+      title: input.title,
+      message: input.message || "",
+      kind: input.kind || "",
+      href: input.href || "",
+      meta: input.meta ?? null,
+      ...(targetRoles.length ? { targetRoles } : {}),
+      ...(targetUsers.length ? { targetUsers } : {}),
+    });
+  } catch {
+    // never block core workflows
+  }
+}
+
 // @desc    Schedule pickup for a ticket (creates/updates pickup logistics)
 // @route   POST /api/logistics/schedule-pickup
 export const schedulePickup = asyncHandler(async (req: any, res: any) => {
@@ -114,6 +168,19 @@ export const schedulePickup = asyncHandler(async (req: any, res: any) => {
   }
 
   await ticket.save();
+
+  void safeCreateNotification({
+    title: "Pickup Scheduled",
+    message: `${String(ticket.ticketId || "Ticket")} pickup scheduled`.slice(0, 500),
+    kind: "PICKUP_SCHEDULED",
+    meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || "") },
+    targetRoles: ["ADMIN"],
+    targetUsers: [
+      (ticket as any)?.createdBy,
+      (ticket as any)?.salesAssignee,
+      ...(Array.isArray((ticket as any)?.assignedTo) ? (ticket as any).assignedTo : []),
+    ],
+  });
 
   res.status(201).json({ success: true, data: logistics });
 });
@@ -307,6 +374,19 @@ export const saveUnderDispatch = asyncHandler(async (req: any, res: any) => {
     });
   }
 
+  // Gate: once a ticket is in UNDER_REPAIRED, Sales/Admin can proceed to UNDER_DISPATCH
+  // only after engineer final decision on the job card (REPAIRABLE / SCRAP).
+  if (String(ticket.status || "").toUpperCase() === "UNDER_REPAIRED") {
+    const final = await getEngineerFinalStatusForTicket(ticket);
+    if (!["REPAIRABLE", "NOT_REPAIRABLE"].includes(final)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Cannot proceed with UNDER_DISPATCH until the engineer finalizes the job card as REPAIRABLE or NOT REPAIRABLE (SCRAP).",
+      });
+    }
+  }
+
   const setPatch: Record<string, any> = {};
   if (invoiceGenerated !== null) setPatch["billing.invoiceGenerated"] = invoiceGenerated;
   if (paymentDone !== null) setPatch["billing.paymentDone"] = paymentDone;
@@ -445,6 +525,18 @@ export const approveDispatch = asyncHandler(async (req: any, res: any) => {
   ticket.logistics = logistics._id;
   await ticket.save().catch(() => {});
 
+  void safeCreateNotification({
+    title: "Dispatch Approved",
+    message: `${String(ticket.ticketId || "Ticket")} dispatch approved by Admin`.slice(0, 500),
+    kind: "DISPATCH_APPROVED",
+    meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || ""), remark },
+    targetRoles: ["SALES"],
+    targetUsers: [
+      logistics?.billing?.dispatchApprovalRequestedBy,
+      (ticket as any)?.salesAssignee,
+    ],
+  });
+
   res.status(200).json({
     success: true,
     data: {
@@ -490,6 +582,18 @@ export const rejectDispatch = asyncHandler(async (req: any, res: any) => {
 
   ticket.logistics = logistics._id;
   await ticket.save().catch(() => {});
+
+  void safeCreateNotification({
+    title: "Dispatch Rejected",
+    message: `${String(ticket.ticketId || "Ticket")} dispatch rejected by Admin${remark ? `: ${remark}` : ""}`.slice(0, 500),
+    kind: "DISPATCH_REJECTED",
+    meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || ""), remark },
+    targetRoles: ["SALES"],
+    targetUsers: [
+      logistics?.billing?.dispatchApprovalRequestedBy,
+      (ticket as any)?.salesAssignee,
+    ],
+  });
 
   res.status(200).json({
     success: true,
@@ -569,6 +673,19 @@ export const scheduleDispatch = asyncHandler(async (req: any, res: any) => {
   }
 
   await ticket.save();
+
+  void safeCreateNotification({
+    title: "Dispatch Scheduled",
+    message: `${String(ticket.ticketId || "Ticket")} dispatch scheduled`.slice(0, 500),
+    kind: "DISPATCH_SCHEDULED",
+    meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || "") },
+    targetRoles: ["ADMIN"],
+    targetUsers: [
+      (ticket as any)?.createdBy,
+      (ticket as any)?.salesAssignee,
+      ...(Array.isArray((ticket as any)?.assignedTo) ? (ticket as any).assignedTo : []),
+    ],
+  });
 
   res.status(201).json({ success: true, data: logistics });
 });

@@ -24,6 +24,7 @@ const sla_routes_1 = __importDefault(require("./routes/sla.routes"));
 const settings_routes_1 = __importDefault(require("./routes/settings.routes"));
 const report_routes_1 = __importDefault(require("./routes/report.routes"));
 const dashboard_routes_1 = __importDefault(require("./routes/dashboard.routes"));
+const notification_routes_1 = __importDefault(require("./routes/notification.routes"));
 // Import middleware (will create later)
 const error_middleware_1 = require("./middleware/error.middleware");
 const app = (0, express_1.default)();
@@ -111,6 +112,7 @@ app.use("/api/sla", sla_routes_1.default);
 app.use("/api/settings", settings_routes_1.default);
 app.use("/api/reports", report_routes_1.default);
 app.use("/api/dashboard", dashboard_routes_1.default);
+app.use("/api/notifications", notification_routes_1.default);
 // ─── 404 HANDLER ─────────────────────────────────────────────────────────────
 app.use("*", (req, res) => {
     res.status(404).json({

@@ -10,6 +10,7 @@ const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const User_model_1 = __importDefault(require("../models/User.model"));
 const CustomerCompany_model_1 = __importDefault(require("../models/CustomerCompany.model"));
+const Notification_model_1 = __importDefault(require("../models/Notification.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
 const cloudinary_1 = require("../config/cloudinary");
@@ -34,6 +35,45 @@ const ASSUMED_DISPATCH_LAG_DAYS = 7; // UNDER_DISPATCH → DISPATCHED assumed
 // Requirement: warranty end = dispatch date + (6 months + 1 week).
 // The system already treats "6 months" as 180 days elsewhere, so we keep it consistent.
 const WARRANTY_AFTER_DISPATCH_DAYS = 187; // 180 + 7
+function toIdString(v) {
+    if (!v)
+        return "";
+    if (typeof v === "string")
+        return v;
+    if (typeof v === "object" && v?._id)
+        return String(v._id);
+    return String(v);
+}
+function uniqIds(ids) {
+    const out = [];
+    const seen = new Set();
+    for (const v of ids || []) {
+        const s = toIdString(v).trim();
+        if (!s || seen.has(s))
+            continue;
+        seen.add(s);
+        out.push(s);
+    }
+    return out;
+}
+async function safeCreateNotification(input) {
+    try {
+        const targetRoles = uniqIds((input.targetRoles || []).map((r) => String(r || "").trim().toUpperCase())).filter(Boolean);
+        const targetUsers = uniqIds(input.targetUsers || []);
+        await Notification_model_1.default.create({
+            title: input.title,
+            message: input.message || "",
+            kind: input.kind || "",
+            href: input.href || "",
+            meta: input.meta ?? null,
+            ...(targetRoles.length ? { targetRoles } : {}),
+            ...(targetUsers.length ? { targetUsers } : {}),
+        });
+    }
+    catch {
+        // Never block core workflows for notifications
+    }
+}
 function addDays(d, days) {
     return new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
 }
@@ -306,6 +346,13 @@ function normalizeFlowStatus(raw) {
         return 'UNDER_REPAIRED';
     return 'CREATED';
 }
+async function getEngineerFinalStatusForTicket(ticket) {
+    const jobCardId = toIdString(ticket?.jobCard);
+    if (!jobCardId)
+        return "";
+    const jc = await JobCard_model_1.default.findById(jobCardId).select("engineerFinalStatus").lean();
+    return String(jc?.engineerFinalStatus || "").toUpperCase().trim();
+}
 function toDateOrNull(v) {
     if (!v)
         return null;
@@ -420,6 +467,18 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
             delete data.inverter.warrantyEnd;
         }
     }
+    void safeCreateNotification({
+        title: "New Ticket Created",
+        message: `${String(data?.ticketId || "Ticket")} created by ${String(req.user?.name || "user")}`.slice(0, 500),
+        kind: "TICKET_CREATED",
+        meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || "") },
+        targetRoles: ["ADMIN", "SALES"],
+        targetUsers: [
+            ticket?.createdBy,
+            ticket?.salesAssignee,
+            ...(Array.isArray(ticket?.assignedTo) ? ticket.assignedTo : []),
+        ],
+    });
     res.status(201).json({ success: true, data });
 });
 // @desc    Create multiple tickets (bulk)
@@ -683,6 +742,16 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         else {
             const prevIdx = STATUS_FLOW.indexOf(prevFlow);
             const nextIdx = STATUS_FLOW.indexOf(nextFlow);
+            // Business rule: UNDER_REPAIRED -> UNDER_DISPATCH requires engineer final decision (REPAIRABLE / SCRAP).
+            if (prevFlow === "UNDER_REPAIRED" && nextFlow === "UNDER_DISPATCH") {
+                const final = await getEngineerFinalStatusForTicket(ticket);
+                if (!["REPAIRABLE", "NOT_REPAIRABLE"].includes(final)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: "Cannot move to UNDER_DISPATCH until the engineer finalizes the job card as REPAIRABLE or NOT REPAIRABLE (SCRAP).",
+                    });
+                }
+            }
             // Business rule: Sales can proceed to DISPATCHED only after Admin approval.
             if (roleNorm === "SALES" && nextFlow === "DISPATCHED") {
                 const delivery = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "DELIVERY" })
@@ -804,6 +873,25 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
     await ticket.populate('createdBy', 'email name phone');
     await ticket.populate('statusHistory.changedBy', 'name');
     await ticket.populate('logistics');
+    if (ticket.status && ticket.status !== prevStatus) {
+        void safeCreateNotification({
+            title: "Ticket Status Updated",
+            message: `${String(ticket.ticketId || "Ticket")} moved from ${String(prevStatus || "").toUpperCase()} to ${String(ticket.status || "").toUpperCase()}`.slice(0, 500),
+            kind: "TICKET_STATUS",
+            meta: {
+                ticketDbId: String(ticket._id),
+                ticketId: String(ticket.ticketId || ""),
+                prevStatus: String(prevStatus || "").toUpperCase(),
+                nextStatus: String(ticket.status || "").toUpperCase(),
+            },
+            targetRoles: ["ADMIN"],
+            targetUsers: [
+                ticket?.createdBy?._id || ticket?.createdBy,
+                ticket?.salesAssignee?._id || ticket?.salesAssignee,
+                ...(Array.isArray(ticket?.assignedTo) ? ticket.assignedTo : []),
+            ],
+        });
+    }
     res.json({ success: true, data: ticket });
 });
 // @desc    Assign engineer to on-site (offline booking) ticket
@@ -1292,10 +1380,32 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
                 message: "Access denied: Only engineers can finalize job cards.",
             });
         }
+        const prevFinal = String(jobcard?.engineerFinalStatus || "").toUpperCase().trim();
         jobcard.engineerFinalStatus = requestedFinal;
         jobcard.engineerFinalizedAt = requestedFinalizedAt || new Date();
         jobcard.engineerFinalizedBy = req.user?._id;
         await jobcard.save();
+        if (prevFinal !== requestedFinal) {
+            const ticketCode = String(ticket.ticketId || ticket._id || "");
+            const pretty = requestedFinal === "NOT_REPAIRABLE" ? "SCRAP" : "REPAIRED";
+            void safeCreateNotification({
+                title: "Engineer Final Decision",
+                message: `${ticketCode} finalized as ${pretty}`.slice(0, 500),
+                kind: "JOB_CARD_FINAL",
+                meta: {
+                    ticketDbId: String(ticket._id),
+                    ticketId: String(ticket.ticketId || ""),
+                    engineerFinalStatus: requestedFinal,
+                    engineerFinalizedBy: String(req.user?._id || ""),
+                },
+                targetRoles: ["ADMIN", "SALES"],
+                targetUsers: [
+                    ticket?.createdBy?._id || ticket?.createdBy,
+                    ticket?.salesAssignee?._id || ticket?.salesAssignee,
+                    ...(Array.isArray(ticket?.assignedTo) ? ticket.assignedTo : []),
+                ],
+            });
+        }
         // Notify sales/admin when engineer scraps the unit.
         if (requestedFinal === "NOT_REPAIRABLE") {
             try {

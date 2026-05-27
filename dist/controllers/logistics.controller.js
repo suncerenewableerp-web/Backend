@@ -6,8 +6,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getApprovedDispatchApprovals = exports.getPendingDispatchApprovals = exports.scheduleDispatch = exports.rejectDispatch = exports.approveDispatch = exports.saveUnderDispatch = exports.uploadUnderDispatchProof = exports.getLogisticsByTicket = exports.schedulePickup = exports.updateTracking = exports.createLogistics = exports.getLogistics = void 0;
 const Logistics_model_1 = __importDefault(require("../models/Logistics.model"));
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
+const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const Role_model_1 = __importDefault(require("../models/Role.model"));
 const User_model_1 = __importDefault(require("../models/User.model"));
+const Notification_model_1 = __importDefault(require("../models/Notification.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
 const cloudinary_1 = require("../config/cloudinary");
@@ -65,6 +67,52 @@ function normalizeRemark(input) {
         return "";
     return raw.replace(/\s+/g, " ").trim().slice(0, 500);
 }
+function toIdString(v) {
+    if (!v)
+        return "";
+    if (typeof v === "string")
+        return v;
+    if (typeof v === "object" && v?._id)
+        return String(v._id);
+    return String(v);
+}
+async function getEngineerFinalStatusForTicket(ticket) {
+    const jobCardId = toIdString(ticket?.jobCard);
+    if (!jobCardId)
+        return "";
+    const jc = await JobCard_model_1.default.findById(jobCardId).select("engineerFinalStatus").lean();
+    return String(jc?.engineerFinalStatus || "").toUpperCase().trim();
+}
+function uniqIds(ids) {
+    const out = [];
+    const seen = new Set();
+    for (const v of ids || []) {
+        const s = toIdString(v).trim();
+        if (!s || seen.has(s))
+            continue;
+        seen.add(s);
+        out.push(s);
+    }
+    return out;
+}
+async function safeCreateNotification(input) {
+    try {
+        const targetRoles = uniqIds((input.targetRoles || []).map((r) => String(r || "").trim().toUpperCase())).filter(Boolean);
+        const targetUsers = uniqIds(input.targetUsers || []);
+        await Notification_model_1.default.create({
+            title: input.title,
+            message: input.message || "",
+            kind: input.kind || "",
+            href: input.href || "",
+            meta: input.meta ?? null,
+            ...(targetRoles.length ? { targetRoles } : {}),
+            ...(targetUsers.length ? { targetUsers } : {}),
+        });
+    }
+    catch {
+        // never block core workflows
+    }
+}
 // @desc    Schedule pickup for a ticket (creates/updates pickup logistics)
 // @route   POST /api/logistics/schedule-pickup
 exports.schedulePickup = (0, error_middleware_1.asyncHandler)(async (req, res) => {
@@ -104,6 +152,18 @@ exports.schedulePickup = (0, error_middleware_1.asyncHandler)(async (req, res) =
         ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
     }
     await ticket.save();
+    void safeCreateNotification({
+        title: "Pickup Scheduled",
+        message: `${String(ticket.ticketId || "Ticket")} pickup scheduled`.slice(0, 500),
+        kind: "PICKUP_SCHEDULED",
+        meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || "") },
+        targetRoles: ["ADMIN"],
+        targetUsers: [
+            ticket?.createdBy,
+            ticket?.salesAssignee,
+            ...(Array.isArray(ticket?.assignedTo) ? ticket.assignedTo : []),
+        ],
+    });
     res.status(201).json({ success: true, data: logistics });
 });
 // @desc    Get logistics records for a ticket (pickup + delivery)
@@ -275,6 +335,17 @@ exports.saveUnderDispatch = (0, error_middleware_1.asyncHandler)(async (req, res
             message: "Under-dispatch review is allowed only when the ticket is UNDER_REPAIRED, UNDER_DISPATCH, DISPATCHED or INSTALLATION_DONE.",
         });
     }
+    // Gate: once a ticket is in UNDER_REPAIRED, Sales/Admin can proceed to UNDER_DISPATCH
+    // only after engineer final decision on the job card (REPAIRABLE / SCRAP).
+    if (String(ticket.status || "").toUpperCase() === "UNDER_REPAIRED") {
+        const final = await getEngineerFinalStatusForTicket(ticket);
+        if (!["REPAIRABLE", "NOT_REPAIRABLE"].includes(final)) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot proceed with UNDER_DISPATCH until the engineer finalizes the job card as REPAIRABLE or NOT REPAIRABLE (SCRAP).",
+            });
+        }
+    }
     const setPatch = {};
     if (invoiceGenerated !== null)
         setPatch["billing.invoiceGenerated"] = invoiceGenerated;
@@ -395,6 +466,17 @@ exports.approveDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) 
     await logistics.save();
     ticket.logistics = logistics._id;
     await ticket.save().catch(() => { });
+    void safeCreateNotification({
+        title: "Dispatch Approved",
+        message: `${String(ticket.ticketId || "Ticket")} dispatch approved by Admin`.slice(0, 500),
+        kind: "DISPATCH_APPROVED",
+        meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || ""), remark },
+        targetRoles: ["SALES"],
+        targetUsers: [
+            logistics?.billing?.dispatchApprovalRequestedBy,
+            ticket?.salesAssignee,
+        ],
+    });
     res.status(200).json({
         success: true,
         data: {
@@ -434,6 +516,17 @@ exports.rejectDispatch = (0, error_middleware_1.asyncHandler)(async (req, res) =
     await logistics.save();
     ticket.logistics = logistics._id;
     await ticket.save().catch(() => { });
+    void safeCreateNotification({
+        title: "Dispatch Rejected",
+        message: `${String(ticket.ticketId || "Ticket")} dispatch rejected by Admin${remark ? `: ${remark}` : ""}`.slice(0, 500),
+        kind: "DISPATCH_REJECTED",
+        meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || ""), remark },
+        targetRoles: ["SALES"],
+        targetUsers: [
+            logistics?.billing?.dispatchApprovalRequestedBy,
+            ticket?.salesAssignee,
+        ],
+    });
     res.status(200).json({
         success: true,
         data: {
@@ -501,6 +594,18 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
         ticket.statusHistory.push({ status: ticket.status, changedBy: req.user._id });
     }
     await ticket.save();
+    void safeCreateNotification({
+        title: "Dispatch Scheduled",
+        message: `${String(ticket.ticketId || "Ticket")} dispatch scheduled`.slice(0, 500),
+        kind: "DISPATCH_SCHEDULED",
+        meta: { ticketDbId: String(ticket._id), ticketId: String(ticket.ticketId || "") },
+        targetRoles: ["ADMIN"],
+        targetUsers: [
+            ticket?.createdBy,
+            ticket?.salesAssignee,
+            ...(Array.isArray(ticket?.assignedTo) ? ticket.assignedTo : []),
+        ],
+    });
     res.status(201).json({ success: true, data: logistics });
 });
 // @desc    List tickets pending Admin dispatch approval

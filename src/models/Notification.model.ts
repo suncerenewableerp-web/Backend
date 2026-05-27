@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 
+
 const notificationSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true, maxlength: 140 },

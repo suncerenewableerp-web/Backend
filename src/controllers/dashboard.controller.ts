@@ -418,6 +418,92 @@ export const getServicingStatus = asyncHandler(async (req: any, res: any) => {
   });
 });
 
+// @desc    Inventory summary — vendor / model / status counts (optionally period-filtered)
+// @route   GET /api/dashboard/inventory-summary?period=all|weekly|monthly|yearly&year=2026&month=6&tz=Asia/Kolkata
+export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
+  const tz = safeTz(req.query?.tz);
+  const scope = ticketScopeQuery(req.user);
+  const period = String(req.query?.period || "all").trim().toLowerCase();
+
+  let dateMatch: any = {};
+  if (period === "weekly") {
+    const from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    dateMatch = { createdAt: { $gte: from } };
+  } else if (period === "monthly") {
+    const win = computePeriodWindow({ period: "monthly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
+    dateMatch = { createdAt: { $gte: win.from, $lt: win.toExclusive } };
+  } else if (period === "quarterly") {
+    const from = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    dateMatch = { createdAt: { $gte: from } };
+  } else if (period === "halfyearly") {
+    const from = new Date(Date.now() - 182 * 24 * 60 * 60 * 1000);
+    dateMatch = { createdAt: { $gte: from } };
+  } else if (period === "yearly") {
+    const win = computePeriodWindow({ period: "yearly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
+    dateMatch = { createdAt: { $gte: win.from, $lt: win.toExclusive } };
+  }
+
+  const baseMatch = { ...scope, ...dateMatch };
+
+  const normalizeStr = (v: any, fallback: string): string => {
+    const raw = String(v || "").trim();
+    if (!raw || raw === "-" || raw === "—") return fallback;
+    return raw;
+  };
+
+  const [vendorRows, modelRows, statusRows]: [
+    Array<{ _id: string; count: number }>,
+    Array<{ _id: { model: string; vendor: string }; count: number }>,
+    Array<{ _id: string; count: number }>,
+  ] = await Promise.all([
+    Ticket.aggregate([
+      { $match: baseMatch },
+      { $group: { _id: { $ifNull: ["$inverter.make", ""] }, count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]),
+    Ticket.aggregate([
+      { $match: baseMatch },
+      {
+        $group: {
+          _id: {
+            model: { $ifNull: ["$inverter.model", ""] },
+            vendor: { $ifNull: ["$inverter.make", ""] },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]),
+    Ticket.aggregate([
+      { $match: baseMatch },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]),
+  ]);
+
+  const total = vendorRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+
+  const vendors = vendorRows.map((r) => ({
+    vendor: normalizeStr(r._id, "Unknown Vendor"),
+    count: Number(r.count) || 0,
+  }));
+
+  const models = modelRows
+    .map((r) => ({
+      model: normalizeStr(r._id?.model, "Unknown Model"),
+      vendor: normalizeStr(r._id?.vendor, "Unknown Vendor"),
+      count: Number(r.count) || 0,
+    }))
+    .filter((m) => m.model !== "Unknown Model");
+
+  const statuses = statusRows.map((r) => ({
+    status: String(r._id || "UNKNOWN").toUpperCase().trim() || "UNKNOWN",
+    count: Number(r.count) || 0,
+  }));
+
+  res.json({ success: true, data: { total, vendors, models, statuses } });
+});
+
 // @desc    Client details (grouped summary) OR daily breakdown for a client within a period
 // @route   GET /api/dashboard/client-details?period=...&clientName=...&clientAddress=...&tz=Asia/Kolkata
 export const getClientDetails = asyncHandler(async (req: any, res: any) => {

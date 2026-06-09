@@ -14,4 +14,5 @@ router.get('/', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getD
 router.get('/ticket-trends', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getTicketTrends));
 router.get('/servicing-status', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getServicingStatus));
 router.get('/client-details', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getClientDetails));
+router.get('/inventory-summary', (0, error_middleware_1.asyncHandler)(dashboard_controller_1.getInventorySummary));
 exports.default = router;

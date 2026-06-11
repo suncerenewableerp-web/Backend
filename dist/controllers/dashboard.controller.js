@@ -420,7 +420,7 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
             return fallback;
         return raw;
     };
-    const [vendorRows, modelRows, statusRows] = await Promise.all([
+    const [vendorRows, modelRows, statusRows, customerRows] = await Promise.all([
         Ticket_model_1.default.aggregate([
             { $match: baseMatch },
             { $group: { _id: { $ifNull: ["$inverter.make", ""] }, count: { $sum: 1 } } },
@@ -444,6 +444,16 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
             { $group: { _id: "$status", count: { $sum: 1 } } },
             { $sort: { count: -1 } },
         ]),
+        Ticket_model_1.default.aggregate([
+            { $match: baseMatch },
+            {
+                $group: {
+                    _id: { $ifNull: ["$customer.company", { $ifNull: ["$customer.name", ""] }] },
+                    count: { $sum: 1 },
+                },
+            },
+            { $sort: { count: -1 } },
+        ]),
     ]);
     const total = vendorRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
     const vendors = vendorRows.map((r) => ({
@@ -461,7 +471,13 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
         status: String(r._id || "UNKNOWN").toUpperCase().trim() || "UNKNOWN",
         count: Number(r.count) || 0,
     }));
-    res.json({ success: true, data: { total, vendors, models, statuses } });
+    const customers = customerRows
+        .map((r) => ({
+        customer: normalizeStr(r._id, "Unknown Customer"),
+        count: Number(r.count) || 0,
+    }))
+        .filter((c) => c.customer !== "Unknown Customer");
+    res.json({ success: true, data: { total, vendors, models, statuses, customers } });
 });
 // @desc    Client details (grouped summary) OR daily breakdown for a client within a period
 // @route   GET /api/dashboard/client-details?period=...&clientName=...&clientAddress=...&tz=Asia/Kolkata

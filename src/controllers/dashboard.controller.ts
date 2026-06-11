@@ -420,30 +420,37 @@ export const getServicingStatus = asyncHandler(async (req: any, res: any) => {
 
 // @desc    Inventory summary — vendor / model / status counts (optionally period-filtered)
 // @route   GET /api/dashboard/inventory-summary?period=all|weekly|monthly|yearly&year=2026&month=6&tz=Asia/Kolkata
+//
+// For non-"all" periods the query shows the state of ALL tickets on the LAST DAY of the period,
+// not just tickets created within the period:
+//   - vendor / model / customer: tickets that existed by period end (createdAt < periodEnd)
+//   - status: each ticket's status AS OF the last day, reconstructed from statusHistory
 export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
   const tz = safeTz(req.query?.tz);
   const scope = ticketScopeQuery(req.user);
   const period = String(req.query?.period || "all").trim().toLowerCase();
 
-  let dateMatch: any = {};
+  // Compute the exclusive upper bound for "tickets that existed by period end".
+  // null means no date cap (period = "all").
+  let periodEnd: Date | null = null;
   if (period === "weekly") {
-    const from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    dateMatch = { createdAt: { $gte: from } };
+    periodEnd = new Date(); // rolling — end = now
   } else if (period === "monthly") {
     const win = computePeriodWindow({ period: "monthly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
-    dateMatch = { createdAt: { $gte: win.from, $lt: win.toExclusive } };
+    periodEnd = win.toExclusive;
   } else if (period === "quarterly") {
-    const from = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    dateMatch = { createdAt: { $gte: from } };
+    periodEnd = new Date(); // rolling
   } else if (period === "halfyearly") {
-    const from = new Date(Date.now() - 182 * 24 * 60 * 60 * 1000);
-    dateMatch = { createdAt: { $gte: from } };
+    periodEnd = new Date(); // rolling
   } else if (period === "yearly") {
     const win = computePeriodWindow({ period: "yearly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
-    dateMatch = { createdAt: { $gte: win.from, $lt: win.toExclusive } };
+    periodEnd = win.toExclusive;
   }
 
-  const baseMatch = { ...scope, ...dateMatch };
+  // Base match: all tickets that existed by period end (vendor / model / customer don't change).
+  const baseMatch: any = periodEnd
+    ? { ...scope, createdAt: { $lt: periodEnd } }
+    : { ...scope };
 
   const normalizeStr = (v: any, fallback: string): string => {
     const raw = String(v || "").trim();
@@ -451,9 +458,58 @@ export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
     return raw;
   };
 
-  const [vendorRows, modelRows, statusRows]: [
+  // Status aggregation: for non-"all" periods reconstruct status AS OF periodEnd from statusHistory.
+  // Logic: take the most recent statusHistory entry with changedAt < periodEnd; if none exists,
+  // the ticket hadn't changed status yet → use the current $status field (initial state).
+  const statusAggregation = periodEnd
+    ? Ticket.aggregate([
+        { $match: baseMatch },
+        {
+          $addFields: {
+            _histBefore: {
+              $filter: {
+                input: { $ifNull: ["$statusHistory", []] },
+                as: "h",
+                cond: { $lt: ["$$h.changedAt", periodEnd] },
+              },
+            },
+          },
+        },
+        { $addFields: { _maxChangedAt: { $max: "$_histBefore.changedAt" } } },
+        {
+          $addFields: {
+            _latestEntry: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$_histBefore",
+                    as: "h",
+                    cond: { $eq: ["$$h.changedAt", "$_maxChangedAt"] },
+                  },
+                },
+                0,
+              ],
+            },
+          },
+        },
+        {
+          $addFields: {
+            _statusAtEnd: { $ifNull: ["$_latestEntry.status", "$status"] },
+          },
+        },
+        { $group: { _id: "$_statusAtEnd", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ])
+    : Ticket.aggregate([
+        { $match: baseMatch },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]);
+
+  const [vendorRows, modelRows, statusRows, customerRows]: [
     Array<{ _id: string; count: number }>,
     Array<{ _id: { model: string; vendor: string }; count: number }>,
+    Array<{ _id: string; count: number }>,
     Array<{ _id: string; count: number }>,
   ] = await Promise.all([
     Ticket.aggregate([
@@ -474,9 +530,15 @@ export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
       },
       { $sort: { count: -1 } },
     ]),
+    statusAggregation,
     Ticket.aggregate([
       { $match: baseMatch },
-      { $group: { _id: "$status", count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: { $ifNull: ["$customer.company", { $ifNull: ["$customer.name", ""] }] },
+          count: { $sum: 1 },
+        },
+      },
       { $sort: { count: -1 } },
     ]),
   ]);
@@ -501,7 +563,14 @@ export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
     count: Number(r.count) || 0,
   }));
 
-  res.json({ success: true, data: { total, vendors, models, statuses } });
+  const customers = customerRows
+    .map((r) => ({
+      customer: normalizeStr(r._id, "Unknown Customer"),
+      count: Number(r.count) || 0,
+    }))
+    .filter((c) => c.customer !== "Unknown Customer");
+
+  res.json({ success: true, data: { total, vendors, models, statuses, customers } });
 });
 
 // @desc    Client details (grouped summary) OR daily breakdown for a client within a period

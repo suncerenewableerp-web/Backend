@@ -1,0 +1,8 @@
+# Keep historical data files and generated reports out of version control.
+*.xlsx
+*.xls
+*.csv
+import-report-*.json
+
+# But keep the docs.
+!README.md

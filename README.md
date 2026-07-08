@@ -90,6 +90,13 @@ Notes:
 npm run seed
 ```
 
+To clear all existing tickets and their linked job cards/logistics records:
+```bash
+npm run purge:tickets -- --force
+```
+
+Set `SEED_DEMO_TICKETS=true` only if you want the RBAC seed to recreate demo tickets.
+
 ### 4. Start the server
 ```bash
 # Development (with auto-reload)

@@ -8,6 +8,12 @@
  *   # Actually insert (only after the dry run looks correct):
  *   npx ts-node src/scripts/importTickets.ts ./import/tickets.xlsx --commit
  *
+ *   # Optional: store the import report somewhere writable
+ *   npx ts-node src/scripts/importTickets.ts ./import/tickets.xlsx --commit --report-dir=./import-reports
+ *
+ *   # Optional: force historical years to CLOSED while skipping newer years
+ *   npx ts-node src/scripts/importTickets.ts ./import/tickets.xlsx --years=2022,2023,2024 --close-through-year=2024 --commit
+ *
  * SAFETY GUARANTEES:
  *   - ONLY inserts new tickets. Never updates or deletes any existing record.
  *   - Existing IDs / relationships are untouched.
@@ -117,7 +123,9 @@ function parseDate(v: any): Date | null {
   const s = clean(v);
   if (!s) return null;
   // "7-Feb-2026", "21-Jan-26", "7 Feb 2026", "7/Feb/26"
-  const m = s.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{2,4})$/);
+  // Some workbook cells contain multiple dates in one string, so we intentionally
+  // match the first date-like token anywhere in the cell.
+  const m = s.match(/(\d{1,2})[-/\s]([A-Za-z]{3,})[-/\s](\d{2,4})/);
   if (m) {
     const day = parseInt(m[1], 10);
     const mon = MONTHS[m[2].slice(0, 3).toLowerCase()];
@@ -173,6 +181,33 @@ function makeTicketIdFactory(existingIds: Set<string>) {
 async function main() {
   const args = process.argv.slice(2);
   const commit = args.includes("--commit");
+  const yearsArg = args.find((a) => a.startsWith("--years="));
+  const maxYearArg = args.find((a) => a.startsWith("--max-year="));
+  const closeYearArgs = args.filter((a) => a.startsWith("--close-year="));
+  const closeYearsArg = args.find((a) => a.startsWith("--close-years="));
+  const closeThroughYearArg = args.find((a) => a.startsWith("--close-through-year="));
+  const reportDirArg = args.find((a) => a.startsWith("--report-dir="));
+  const targetYears = new Set<number>();
+  if (yearsArg) {
+    for (const part of (yearsArg.split("=")[1] || "").split(",")) {
+      const year = Number.parseInt(part.trim(), 10);
+      if (!Number.isNaN(year)) targetYears.add(year);
+    }
+  }
+  const maxYear = maxYearArg ? Number.parseInt(maxYearArg.split("=")[1] || "", 10) : null;
+  const closeYears = new Set<number>();
+  for (const arg of closeYearArgs) {
+    const year = Number.parseInt(arg.split("=")[1] || "", 10);
+    if (!Number.isNaN(year)) closeYears.add(year);
+  }
+  if (closeYearsArg) {
+    for (const part of (closeYearsArg.split("=")[1] || "").split(",")) {
+      const year = Number.parseInt(part.trim(), 10);
+      if (!Number.isNaN(year)) closeYears.add(year);
+    }
+  }
+  const closeThroughYear = closeThroughYearArg ? Number.parseInt(closeThroughYearArg.split("=")[1] || "", 10) : null;
+  const reportDir = reportDirArg ? path.resolve(process.cwd(), reportDirArg.split("=")[1] || "") : path.resolve(process.cwd(), "import-reports");
   const fileArg = args.find((a) => !a.startsWith("--")) || "./import/tickets.xlsx";
   const filePath = path.resolve(process.cwd(), fileArg);
 
@@ -204,6 +239,17 @@ async function main() {
   const dataRows = matrix.slice(1);
   console.log(`\n🔢 Data rows: ${dataRows.length}`);
 
+  const importYears = new Set<number>();
+  for (const row of dataRows) {
+    const d = parseDate((resolver.ticketDate ? row[headerRow.indexOf(resolver.ticketDate)] : "") ?? "");
+    if (d) importYears.add(d.getUTCFullYear());
+  }
+  console.log(
+    importYears.size
+      ? `🗓️  Detected workbook year(s): ${[...importYears].sort((a, b) => a - b).join(", ")}`
+      : "🗓️  No ticket dates detected yet; duplicate scan will fall back to a full collection pass",
+  );
+
   const cellOf = (row: any[], field: string): any => {
     const header = resolver[field];
     if (!header) return "";
@@ -212,12 +258,22 @@ async function main() {
   };
 
   // Preload existing tickets for dedup + ticketId uniqueness (read-only).
-  await mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/sunce_erp");
+  await mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/sunce_erp", {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+  });
   console.log("✅ Connected to MongoDB (read-only scan for duplicates)…");
 
   const existingIds = new Set<string>();
   const existingKeys = new Set<string>();
-  const cursor = Ticket.find({}, { ticketId: 1, "inverter.serialNo": 1, "inverter.model": 1, "inverter.capacity": 1, "customer.company": 1, createdAt: 1 }).lean().cursor();
+  const yearFilters = [...importYears].map((year) => ({
+    createdAt: {
+      $gte: new Date(Date.UTC(year, 0, 1)),
+      $lt: new Date(Date.UTC(year + 1, 0, 1)),
+    },
+  }));
+  const scanFilter = yearFilters.length ? { $or: yearFilters } : {};
+  const cursor = Ticket.find(scanFilter, { ticketId: 1, "inverter.serialNo": 1, "inverter.model": 1, "inverter.capacity": 1, "customer.company": 1, createdAt: 1 }).lean().cursor();
   for await (const t of cursor as any) {
     if (t?.ticketId) existingIds.add(String(t.ticketId));
     existingKeys.add(compositeKey({
@@ -237,14 +293,23 @@ async function main() {
     imported: 0,
     skippedDuplicate: 0,
     skippedEmpty: 0,
+    skippedOutsideTargetYears: 0,
+    skippedAfterYearCutoff: 0,
+    forcedClosed: 0,
     failed: 0,
     warnings: [] as string[],
     skipped: [] as { row: number; reason: string }[],
     errors: [] as { row: number; reason: string }[],
+    byYear: {} as Record<string, { candidates: number; imported: number; skippedDuplicate: number; skippedOutsideTargetYears: number; skippedAfterYearCutoff: number; forcedClosed: number }>,
   };
 
   const seenInFile = new Set<string>();
   const payloads: any[] = [];
+  const bumpYear = (year: number | null, field: keyof typeof report.byYear[string]) => {
+    const key = year == null ? "NO_DATE" : String(year);
+    report.byYear[key] ||= { candidates: 0, imported: 0, skippedDuplicate: 0, skippedOutsideTargetYears: 0, skippedAfterYearCutoff: 0, forcedClosed: 0 };
+    report.byYear[key][field]++;
+  };
 
   dataRows.forEach((row, i) => {
     const rowNo = i + 2; // 1-based + header
@@ -263,26 +328,55 @@ async function main() {
       const dateRepaired = parseDate(cellOf(row, "dateRepaired"));
       const dateDispatched = parseDate(cellOf(row, "dateDispatched"));
       const rawStatus = clean(cellOf(row, "status")).toUpperCase();
+      const ticketYear = ticketDate?.getUTCFullYear() || null;
 
       // Empty row guard
       if (!company && !serial && !brand && !model) {
         report.skippedEmpty++;
         return;
       }
+      bumpYear(ticketYear, "candidates");
+
+      if (targetYears.size && (ticketYear == null || !targetYears.has(ticketYear))) {
+        report.skippedOutsideTargetYears++;
+        bumpYear(ticketYear, "skippedOutsideTargetYears");
+        report.skipped.push({ row: rowNo, reason: `Ticket date year ${ticketYear ?? "NO_DATE"} is outside target years ${[...targetYears].sort((a, b) => a - b).join(",")}` });
+        return;
+      }
+
+      if (maxYear != null && ticketYear != null && ticketYear > maxYear) {
+        report.skippedAfterYearCutoff++;
+        bumpYear(ticketYear, "skippedAfterYearCutoff");
+        report.skipped.push({ row: rowNo, reason: `Ticket date year ${ticketYear} is after cutoff ${maxYear}` });
+        return;
+      }
 
       const mappedStatus = STATUS_MAP[rawStatus];
-      const status = mappedStatus || "CREATED";
+      const forceClosed = ticketYear != null && (
+        closeYears.has(ticketYear) ||
+        (closeThroughYear != null && !Number.isNaN(closeThroughYear) && ticketYear <= closeThroughYear)
+      );
+      const status = forceClosed ? "CLOSED" : mappedStatus || "CREATED";
+      if (forceClosed) {
+        report.forcedClosed++;
+        bumpYear(ticketYear, "forcedClosed");
+      }
       if (!mappedStatus && rawStatus) {
         report.warnings.push(`Row ${rowNo}: unknown status "${rawStatus}" → defaulted to CREATED`);
+      }
+      if (forceClosed && mappedStatus !== "CLOSED") {
+        report.warnings.push(`Row ${rowNo}: ticket year ${ticketYear} forced to CLOSED`);
       }
 
       const key = compositeKey({ serial, company, date: ticketDate, model, capacity, lr: lrNo });
       if (seenInFile.has(key) || existingKeys.has(key)) {
         report.skippedDuplicate++;
+        bumpYear(ticketYear, "skippedDuplicate");
         report.skipped.push({ row: rowNo, reason: `Duplicate (${company} / ${serial || "no-serial"} / ${fmtDate(ticketDate) || "no-date"})` });
         return;
       }
       seenInFile.add(key);
+      bumpYear(ticketYear, "imported");
 
       const created = ticketDate || new Date();
       const lastActivity = [dateDispatched, dateRepaired, ticketDate].filter(Boolean).sort((a, b) => b!.getTime() - a!.getTime())[0] || created;
@@ -290,6 +384,7 @@ async function main() {
       const noteParts: string[] = [];
       // Preserve the EXACT original Excel stage, so nothing is lost in mapping.
       if (rawStatus) noteParts.push(`Stage: ${rawStatus}`);
+      if (forceClosed) noteParts.push(`Forced CLOSED for ${ticketYear} import rule`);
       if (lrNo) noteParts.push(`LR No: ${lrNo}`);
       if (dateRepaired) noteParts.push(`Repaired: ${fmtDate(dateRepaired)}`);
       if (dateDispatched) noteParts.push(`Dispatched: ${fmtDate(dateDispatched)}`);
@@ -323,7 +418,16 @@ async function main() {
   });
 
   console.log(`\n📊 Parsed: ${payloads.length} new · ${report.skippedDuplicate} duplicate · ${report.skippedEmpty} empty · ${report.failed} parse-failed`);
+  if (report.skippedOutsideTargetYears) console.log(`⏭️  Skipped ${report.skippedOutsideTargetYears} row(s) outside target years`);
+  if (report.skippedAfterYearCutoff) console.log(`⏭️  Skipped ${report.skippedAfterYearCutoff} row(s) after year cutoff`);
+  if (report.forcedClosed) console.log(`🔒 Forced CLOSED on ${report.forcedClosed} ticket(s)`);
   if (report.warnings.length) console.log(`⚠️  ${report.warnings.length} warning(s)`);
+  console.log("🧮 By year:");
+  for (const [year, counts] of Object.entries(report.byYear).sort(([a], [b]) => a.localeCompare(b))) {
+    console.log(
+      `   ${year}: candidates=${counts.candidates} new=${counts.imported} duplicate=${counts.skippedDuplicate} outsideYears=${counts.skippedOutsideTargetYears} cutoff=${counts.skippedAfterYearCutoff} forcedClosed=${counts.forcedClosed}`,
+    );
+  }
 
   if (commit && payloads.length) {
     let session: mongoose.ClientSession | null = null;
@@ -361,8 +465,8 @@ async function main() {
 
   // Write report + error log
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const outDir = path.dirname(filePath);
-  const reportPath = path.join(outDir, `import-report-${stamp}.json`);
+  fs.mkdirSync(reportDir, { recursive: true });
+  const reportPath = path.join(reportDir, `import-report-${stamp}.json`);
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
   console.log(`\n🧾 Report written: ${reportPath}`);
   console.log(`   imported=${report.imported} duplicate=${report.skippedDuplicate} empty=${report.skippedEmpty} failed=${report.failed} warnings=${report.warnings.length}`);

@@ -84,12 +84,18 @@ function formatYmd(d, tz) {
 }
 function normalizePeriodKind(raw) {
     const s = String(raw || "").trim().toLowerCase();
+    if (s === "weekly" || s === "week")
+        return "WEEKLY";
     if (s === "fortnightly" || s === "fortnight" || s === "15d" || s === "15days")
         return "FORTNIGHTLY";
     if (s === "monthly" || s === "month")
         return "MONTHLY";
+    if (s === "halfyearly" || s === "halfyear" || s === "half_yearly" || s === "half-yearly")
+        return "HALFYEARLY";
     if (s === "yearly" || s === "year")
         return "YEARLY";
+    if (s === "custom")
+        return "CUSTOM";
     return "FORTNIGHTLY";
 }
 function computePeriodWindow(input) {
@@ -102,6 +108,36 @@ function computePeriodWindow(input) {
     const last = monthDays(y, m);
     const f = toIntOrNull(input.fortnight);
     const fort = f === 2 ? 2 : f === 1 ? 1 : Number(formatYmd(now, tz).slice(8, 10)) >= 16 ? 2 : 1;
+    if (kind === "WEEKLY") {
+        const day = now.getDay(); // 0=Sun
+        const diffToMonday = day === 0 ? -6 : 1 - day;
+        const monday = new Date(now);
+        monday.setDate(now.getDate() + diffToMonday);
+        monday.setHours(0, 0, 0, 0);
+        const nextMonday = new Date(monday);
+        nextMonday.setDate(monday.getDate() + 7);
+        const fromYmd = monday.toISOString().slice(0, 10);
+        const toYmd = new Date(nextMonday.getTime() - 86400000).toISOString().slice(0, 10);
+        return { kind, from: monday, toExclusive: nextMonday, fromYmd, toYmd };
+    }
+    if (kind === "HALFYEARLY") {
+        const half = m <= 6 ? 1 : 2;
+        const fromMonth = half === 1 ? 1 : 7;
+        const toMonth = half === 1 ? 6 : 12;
+        const from = dateStartInTzIso(y, fromMonth, 1, tz);
+        const toExclusive = half === 1 ? dateStartInTzIso(y, 7, 1, tz) : dateStartInTzIso(y + 1, 1, 1, tz);
+        return { kind, from, toExclusive, fromYmd: `${y}-${pad2(fromMonth)}-01`, toYmd: `${y}-${pad2(toMonth)}-${pad2(monthDays(y, toMonth))}` };
+    }
+    if (kind === "CUSTOM") {
+        const from = input.dateFrom ? new Date(input.dateFrom + "T00:00:00") : new Date(now.getFullYear(), now.getMonth(), 1);
+        const toD = input.dateTo ? new Date(input.dateTo + "T00:00:00") : now;
+        const toExclusive = new Date(toD);
+        toExclusive.setDate(toD.getDate() + 1);
+        toExclusive.setHours(0, 0, 0, 0);
+        const fromYmd = from.toISOString().slice(0, 10);
+        const toYmd = toD.toISOString().slice(0, 10);
+        return { kind, from, toExclusive, fromYmd, toYmd };
+    }
     if (kind === "YEARLY") {
         const from = dateStartInTzIso(y, 1, 1, tz);
         const toExclusive = dateStartInTzIso(y + 1, 1, 1, tz);
@@ -345,6 +381,8 @@ exports.getServicingStatus = (0, error_middleware_1.asyncHandler)(async (req, re
         month: req.query?.month,
         fortnight: req.query?.fortnight,
         tz,
+        dateFrom: req.query?.dateFrom ? String(req.query.dateFrom) : undefined,
+        dateTo: req.query?.dateTo ? String(req.query.dateTo) : undefined,
     });
     const receivedRows = await Ticket_model_1.default.aggregate([
         { $match: { ...scope, createdAt: { $type: "date", $gte: win.from, $lt: win.toExclusive } } },
@@ -388,38 +426,105 @@ exports.getServicingStatus = (0, error_middleware_1.asyncHandler)(async (req, re
 });
 // @desc    Inventory summary — vendor / model / status counts (optionally period-filtered)
 // @route   GET /api/dashboard/inventory-summary?period=all|weekly|monthly|yearly&year=2026&month=6&tz=Asia/Kolkata
+//
+// For non-"all" periods the query shows the state of ALL tickets on the LAST DAY of the period,
+// not just tickets created within the period:
+//   - vendor / model / customer: tickets that existed by period end (createdAt < periodEnd)
+//   - status: each ticket's status AS OF the last day, reconstructed from statusHistory
 exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const tz = safeTz(req.query?.tz);
     const scope = ticketScopeQuery(req.user);
     const period = String(req.query?.period || "all").trim().toLowerCase();
-    let dateMatch = {};
+    // Compute the exclusive upper bound for "tickets that existed by period end".
+    // null means no date cap (period = "all").
+    let periodEnd = null;
+    let periodStart = null;
     if (period === "weekly") {
-        const from = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        dateMatch = { createdAt: { $gte: from } };
+        const now = new Date();
+        periodEnd = now;
+        // Start of current week: Monday 00:00:00 in local tz (approximate with UTC day-of-week)
+        const day = now.getDay(); // 0=Sun, 1=Mon … 6=Sat
+        const diffToMonday = day === 0 ? -6 : 1 - day;
+        const monday = new Date(now);
+        monday.setDate(now.getDate() + diffToMonday);
+        monday.setHours(0, 0, 0, 0);
+        periodStart = monday;
+    }
+    else if (period === "custom") {
+        periodStart = req.query?.dateFrom ? new Date(String(req.query.dateFrom) + "T00:00:00") : null;
+        periodEnd = req.query?.dateTo ? new Date(String(req.query.dateTo) + "T23:59:59") : new Date();
     }
     else if (period === "monthly") {
         const win = computePeriodWindow({ period: "monthly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
-        dateMatch = { createdAt: { $gte: win.from, $lt: win.toExclusive } };
+        periodEnd = win.toExclusive;
     }
     else if (period === "quarterly") {
-        const from = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-        dateMatch = { createdAt: { $gte: from } };
+        periodEnd = new Date(); // rolling
     }
     else if (period === "halfyearly") {
-        const from = new Date(Date.now() - 182 * 24 * 60 * 60 * 1000);
-        dateMatch = { createdAt: { $gte: from } };
+        periodEnd = new Date(); // rolling
     }
     else if (period === "yearly") {
         const win = computePeriodWindow({ period: "yearly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
-        dateMatch = { createdAt: { $gte: win.from, $lt: win.toExclusive } };
+        periodEnd = win.toExclusive;
     }
-    const baseMatch = { ...scope, ...dateMatch };
+    // Base match: all tickets that existed by period end (vendor / model / customer don't change).
+    const baseMatch = periodEnd
+        ? { ...scope, createdAt: { $lt: periodEnd, ...(periodStart ? { $gte: periodStart } : {}) } }
+        : { ...scope };
     const normalizeStr = (v, fallback) => {
         const raw = String(v || "").trim();
         if (!raw || raw === "-" || raw === "—")
             return fallback;
         return raw;
     };
+    // Status aggregation: for non-"all" periods reconstruct status AS OF periodEnd from statusHistory.
+    // Logic: take the most recent statusHistory entry with changedAt < periodEnd; if none exists,
+    // the ticket hadn't changed status yet → use the current $status field (initial state).
+    const statusAggregation = periodEnd
+        ? Ticket_model_1.default.aggregate([
+            { $match: baseMatch },
+            {
+                $addFields: {
+                    _histBefore: {
+                        $filter: {
+                            input: { $ifNull: ["$statusHistory", []] },
+                            as: "h",
+                            cond: { $lt: ["$$h.changedAt", periodEnd] },
+                        },
+                    },
+                },
+            },
+            { $addFields: { _maxChangedAt: { $max: "$_histBefore.changedAt" } } },
+            {
+                $addFields: {
+                    _latestEntry: {
+                        $arrayElemAt: [
+                            {
+                                $filter: {
+                                    input: "$_histBefore",
+                                    as: "h",
+                                    cond: { $eq: ["$$h.changedAt", "$_maxChangedAt"] },
+                                },
+                            },
+                            0,
+                        ],
+                    },
+                },
+            },
+            {
+                $addFields: {
+                    _statusAtEnd: { $ifNull: ["$_latestEntry.status", "$status"] },
+                },
+            },
+            { $group: { _id: "$_statusAtEnd", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+        ])
+        : Ticket_model_1.default.aggregate([
+            { $match: baseMatch },
+            { $group: { _id: "$status", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+        ]);
     const [vendorRows, modelRows, statusRows, customerRows] = await Promise.all([
         Ticket_model_1.default.aggregate([
             { $match: baseMatch },
@@ -439,11 +544,7 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
             },
             { $sort: { count: -1 } },
         ]),
-        Ticket_model_1.default.aggregate([
-            { $match: baseMatch },
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-        ]),
+        statusAggregation,
         Ticket_model_1.default.aggregate([
             { $match: baseMatch },
             {
@@ -490,6 +591,8 @@ exports.getClientDetails = (0, error_middleware_1.asyncHandler)(async (req, res)
         month: req.query?.month,
         fortnight: req.query?.fortnight,
         tz,
+        dateFrom: req.query?.dateFrom ? String(req.query.dateFrom) : undefined,
+        dateTo: req.query?.dateTo ? String(req.query.dateTo) : undefined,
     });
     const clientName = String(req.query?.clientName || "").trim();
     const clientAddress = String(req.query?.clientAddress || "").trim();
@@ -643,33 +746,37 @@ exports.getClientDetails = (0, error_middleware_1.asyncHandler)(async (req, res)
             },
         },
     ]);
-    const byKey = new Map();
-    const keyOf = (n) => `${String(n?.name || "").trim()}|||${String(n?.address || "").trim()}`;
-    (receivedByClient || []).forEach((r) => {
-        const k = keyOf(r._id);
-        byKey.set(k, { name: String(r._id?.name || "").trim(), address: String(r._id?.address || "").trim(), received: Number(r.received || 0) || 0, repaired: 0, scrap: 0, dispatched: 0 });
-    });
-    (repairedByClient || []).forEach((r) => {
-        const k = keyOf(r._id);
-        const cur = byKey.get(k) || { name: String(r._id?.name || "").trim(), address: String(r._id?.address || "").trim(), received: 0, repaired: 0, scrap: 0, dispatched: 0 };
-        cur.repaired = Number(r.repaired || 0) || 0;
-        byKey.set(k, cur);
-    });
-    (scrapByClient || []).forEach((r) => {
-        const k = keyOf(r._id);
-        const cur = byKey.get(k) || { name: String(r._id?.name || "").trim(), address: String(r._id?.address || "").trim(), received: 0, repaired: 0, scrap: 0, dispatched: 0 };
-        cur.scrap = Number(r.scrap || 0) || 0;
-        byKey.set(k, cur);
-    });
-    (dispatchedByClient || []).forEach((r) => {
-        const k = keyOf(r._id);
-        const cur = byKey.get(k) || { name: String(r._id?.name || "").trim(), address: String(r._id?.address || "").trim(), received: 0, repaired: 0, scrap: 0, dispatched: 0 };
-        cur.dispatched = Number(r.dispatched || 0) || 0;
-        byKey.set(k, cur);
-    });
-    const clients = Array.from(byKey.values())
-        .filter((c) => c.name || c.address)
-        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    // Build per-location map keyed by "name|||address"
+    const locKey = (n) => `${String(n?.name || "").trim()}|||${String(n?.address || "").trim()}`;
+    const locMap = new Map();
+    const ensureLoc = (id) => {
+        const k = locKey(id);
+        if (!locMap.has(k))
+            locMap.set(k, { name: String(id?.name || "").trim(), address: String(id?.address || "").trim(), received: 0, repaired: 0, scrap: 0, dispatched: 0 });
+        return locMap.get(k);
+    };
+    (receivedByClient || []).forEach((r) => { ensureLoc(r._id).received = Number(r.received || 0) || 0; });
+    (repairedByClient || []).forEach((r) => { ensureLoc(r._id).repaired = Number(r.repaired || 0) || 0; });
+    (scrapByClient || []).forEach((r) => { ensureLoc(r._id).scrap = Number(r.scrap || 0) || 0; });
+    (dispatchedByClient || []).forEach((r) => { ensureLoc(r._id).dispatched = Number(r.dispatched || 0) || 0; });
+    // Group locations by company name, summing totals
+    const companyMap = new Map();
+    for (const loc of locMap.values()) {
+        if (!loc.name && !loc.address)
+            continue;
+        const companyName = loc.name || loc.address;
+        if (!companyMap.has(companyName)) {
+            companyMap.set(companyName, { name: companyName, received: 0, repaired: 0, scrap: 0, dispatched: 0, locations: [] });
+        }
+        const company = companyMap.get(companyName);
+        company.received += loc.received;
+        company.repaired += loc.repaired;
+        company.scrap += loc.scrap;
+        company.dispatched += loc.dispatched;
+        company.locations.push({ address: loc.address || "—", received: loc.received, repaired: loc.repaired, scrap: loc.scrap, dispatched: loc.dispatched });
+    }
+    const clients = Array.from(companyMap.values())
+        .sort((a, b) => a.name.localeCompare(b.name));
     res.json({
         success: true,
         data: {

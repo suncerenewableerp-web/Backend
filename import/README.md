@@ -21,6 +21,16 @@ Imports historical tickets from an Excel (`.xlsx`) file into the ERP.
    npm run import:tickets -- ./import/tickets.xlsx --commit
    ```
 
+   For the June 2026 workbook in `frontend/Frontend/public`, use:
+   ```bash
+   npm run import:tickets -- "../../frontend/Frontend/public/Copy of IN And OUT Data Of Inverters 3_June_2026 NEW (1) (1).xlsx" --max-year=2025 --close-year=2025 --commit
+   ```
+
+   To import only 2022-2024 rows and force them to closed, without touching 2025/2026:
+   ```bash
+   npm run import:tickets -- "/home/priyansh/Downloads/Copy of IN And OUT Data Of Inverters 3_June_2026 NEW (1) (1).xlsx" --years=2022,2023,2024 --close-through-year=2024 --commit
+   ```
+
 > Tip: run the commit against a **database backup / staging copy first** if possible.
 
 ## Column mapping

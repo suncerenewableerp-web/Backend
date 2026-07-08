@@ -9,6 +9,7 @@
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "build": "tsc -p tsconfig.json",
     "import:tickets": "ts-node src/scripts/importTickets.ts",
+    "purge:tickets": "ts-node src/scripts/purgeTickets.ts",
     "seed": "ts-node src/config/seed.ts",
     "seed:rbac": "ts-node src/config/seed.rbac.ts",
     "reset:password": "ts-node src/config/resetPasswordByEmail.ts"

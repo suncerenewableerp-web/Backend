@@ -109,29 +109,10 @@ const seed = async () => {
       }
     ]);
 
-    // 3. Create 5 Sample Tickets
-    await Ticket.insertMany([
-      {
-        ticketId: 'SR-202412-001',
-        customer: { name: 'Ravi Kumar', phone: '+919999988888', company: 'Green Energy Ltd' },
-        inverter: { model: 'Sunce 5KW', serialNo: 'INV-2023-5678', capacity: '5KW' },
-        issue: { description: 'Inverter not powering on', priority: 'HIGH' },
-        status: 'UNDER_REPAIRED',
-        statusHistory: [{ status: 'CREATED' }, { status: 'UNDER_REPAIRED', changedBy: users[2]._id }]
-      },
-      {
-        ticketId: 'SR-202412-002',
-        customer: { name: 'Priya Sharma', phone: '+918888877777' },
-        inverter: { model: 'Sunce 3KW', serialNo: 'INV-2023-1234' },
-        issue: { description: 'Display error code E101', priority: 'MEDIUM' },
-        status: 'UNDER_REPAIRED'
-      }
-      // Add 3 more similar...
-    ]);
-
     console.log('✅ Seed complete!');
     console.log('👥 Roles:', roles.length);
     console.log('👤 Users:', users.length);
+    console.log('🎫 Tickets: 0 (demo tickets skipped)');
     process.exit(0);
   } catch (error) {
     console.error('❌ Seed failed:', error);

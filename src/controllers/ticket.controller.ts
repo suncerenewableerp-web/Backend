@@ -32,6 +32,40 @@ const ASSUMED_DISPATCH_LAG_DAYS = 7; // UNDER_DISPATCH → DISPATCHED assumed
 // The system already treats "6 months" as 180 days elsewhere, so we keep it consistent.
 const WARRANTY_AFTER_DISPATCH_DAYS = 187; // 180 + 7
 
+const TICKET_LIST_SELECT = [
+  "ticketId",
+  "serviceType",
+  "createdBy",
+  "customer.name",
+  "customer.phone",
+  "customer.email",
+  "customer.company",
+  "customer.address",
+  "inverter.make",
+  "inverter.model",
+  "inverter.serialNo",
+  "inverter.capacity",
+  "inverter.warrantyEnd",
+  "onsite.engineerName",
+  "onsite.visitDate",
+  "onsite.remark",
+  "onsite.markedRepairedAt",
+  "issue.description",
+  "issue.errorCode",
+  "issue.priority",
+  "status",
+  "assignedTo",
+  "salesAssignee",
+  "salesAssigneeEmail",
+  "salesAssigneeName",
+  "logistics",
+  "createdAt",
+  "updatedAt",
+  "slaStatus",
+].join(" ");
+
+const CUSTOMER_TICKET_LIST_SELECT = TICKET_LIST_SELECT.replace("inverter.warrantyEnd", "");
+
 function toIdString(v: any): string {
   if (!v) return "";
   if (typeof v === "string") return v;
@@ -279,18 +313,14 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
   }
 
   const ticketsQuery = Ticket.find(query)
+    .select(roleName === "CUSTOMER" ? CUSTOMER_TICKET_LIST_SELECT : TICKET_LIST_SELECT)
     .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
     .populate('salesAssignee', 'name email')
-    .populate('statusHistory.changedBy', 'name')
     .sort('-createdAt')
     .skip(skip)
-    .limit(lim);
-
-  if (roleName === "CUSTOMER") {
-    // Customers must never see warranty validity/dates.
-    ticketsQuery.select("-inverter.warrantyEnd");
-  }
+    .limit(lim)
+    .lean();
 
   const tickets = await ticketsQuery;
     

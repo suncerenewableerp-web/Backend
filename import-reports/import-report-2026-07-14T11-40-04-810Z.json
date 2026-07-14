@@ -1,0 +1,52 @@
+{
+  "total": 30,
+  "imported": 23,
+  "skippedDuplicate": 7,
+  "skippedEmpty": 0,
+  "skippedOutsideTargetYears": 0,
+  "skippedAfterYearCutoff": 0,
+  "forcedClosed": 0,
+  "failed": 0,
+  "warnings": [],
+  "skipped": [
+    {
+      "row": 14,
+      "reason": "Duplicate (INOX CLEAN / 1.1069E+14 / 2026-06-20)"
+    },
+    {
+      "row": 17,
+      "reason": "Duplicate (Porwal Auto Components Ltd / 50.0TL_____ / 2026-05-25)"
+    },
+    {
+      "row": 18,
+      "reason": "Duplicate (Porwal Auto Components Ltd / 50.0TL_____ / 2026-05-25)"
+    },
+    {
+      "row": 22,
+      "reason": "Duplicate (INOX CLEAN / 1.1069E+14 / 2026-05-16)"
+    },
+    {
+      "row": 27,
+      "reason": "Duplicate (INOX CLEAN / 1.1061E+14 / 2026-05-01)"
+    },
+    {
+      "row": 29,
+      "reason": "Duplicate (Patanjali Haridwar / 4.70217E+11 / 2026-04-22)"
+    },
+    {
+      "row": 30,
+      "reason": "Duplicate (Patanjali Haridwar / 4.70217E+11 / 2026-04-22)"
+    }
+  ],
+  "errors": [],
+  "byYear": {
+    "2026": {
+      "candidates": 30,
+      "imported": 23,
+      "skippedDuplicate": 7,
+      "skippedOutsideTargetYears": 0,
+      "skippedAfterYearCutoff": 0,
+      "forcedClosed": 0
+    }
+  }
+}

@@ -3,6 +3,7 @@ import Role from "../models/Role.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
 import { emailLookupCandidates, normalizeEmailForStorage } from "../utils/emailAddress";
+import { denyAdminManagement } from "../utils/roleGuards";
 
 const normalizeEmail = (email: unknown) => normalizeEmailForStorage(email);
 const normalizeOptionalString = (v: unknown) => {
@@ -58,6 +59,12 @@ export const createUser = asyncHandler(async (req: any, res: any) => {
   if (!roleNorm) {
     return res.status(400).json({ success: false, message: "Role is required" });
   }
+
+  const createDenied = denyAdminManagement(req.user, roleNorm);
+  if (createDenied) {
+    return res.status(403).json({ success: false, message: createDenied });
+  }
+
   if (!phoneNorm) {
     return res.status(400).json({
       success: false,
@@ -199,6 +206,15 @@ export const updateUserRole = asyncHandler(async (req: any, res: any) => {
   }
 
   const currentRole = String(user?.role?.name || "").trim().toUpperCase();
+
+  // Granting or revoking an elevated role is Super Admin territory, whether the
+  // account is being promoted into one or moved out of one.
+  const roleChangeDenied =
+    denyAdminManagement(req.user, roleNorm) || denyAdminManagement(req.user, currentRole);
+  if (roleChangeDenied) {
+    return res.status(403).json({ success: false, message: roleChangeDenied });
+  }
+
   if (currentRole === "ADMIN" && roleNorm !== "ADMIN") {
     const adminRole: any = await Role.findOne({ name: "ADMIN" }).select("_id").lean();
     const adminCount = adminRole?._id
@@ -239,6 +255,12 @@ export const deleteUser = asyncHandler(async (req: any, res: any) => {
   }
 
   const targetRole = String(user?.role?.name || "").trim().toUpperCase();
+
+  const deleteDenied = denyAdminManagement(req.user, targetRole);
+  if (deleteDenied) {
+    return res.status(403).json({ success: false, message: deleteDenied });
+  }
+
   if (targetRole === "ADMIN") {
     const adminRole: any = await Role.findOne({ name: "ADMIN" }).select("_id").lean();
     const adminCount = adminRole?._id

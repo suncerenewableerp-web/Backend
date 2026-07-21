@@ -40,6 +40,9 @@ const authorize = (module, action) => {
     return (0, error_middleware_1.asyncHandler)(async (req, res, next) => {
         const role = req.user?.role;
         const roleName = String(role?.name || "").trim().toUpperCase();
+        // SUPER_ADMIN has full system access by definition.
+        if (roleName === "SUPER_ADMIN")
+            return next();
         // ADMIN should never be blocked by RBAC misconfiguration.
         if (roleName === "ADMIN")
             return next();

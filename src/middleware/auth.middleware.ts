@@ -45,6 +45,9 @@ export const authorize = (module: string, action: string) => {
     const role = req.user?.role;
     const roleName = String(role?.name || "").trim().toUpperCase();
 
+    // SUPER_ADMIN has full system access by definition.
+    if (roleName === "SUPER_ADMIN") return next();
+
     // ADMIN should never be blocked by RBAC misconfiguration.
     if (roleName === "ADMIN") return next();
 

@@ -1,8 +1,3 @@
-// Generate sequential ticket ID: SR-YYYYMM-001
-export const generateTicketId = (year: number, month: number) => {
-  return `SR-${year}${String(month).padStart(2, '0')}-XXX`; // Replace XXX with seq later via aggregation
-};
-
 // Calculate SLA breach
 export const calcSLAStatus = (createdAt: string | Date, targetDays = 3) => {
   const createdAtMs = new Date(createdAt).getTime();

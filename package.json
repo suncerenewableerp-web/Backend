@@ -12,7 +12,8 @@
     "purge:tickets": "ts-node src/scripts/purgeTickets.ts",
     "seed": "ts-node src/config/seed.ts",
     "seed:rbac": "ts-node src/config/seed.rbac.ts",
-    "reset:password": "ts-node src/config/resetPasswordByEmail.ts"
+    "reset:password": "ts-node src/config/resetPasswordByEmail.ts",
+    "create:superadmin": "ts-node src/scripts/createSuperAdmin.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

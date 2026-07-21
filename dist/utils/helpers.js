@@ -1,11 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getPagination = exports.calcSLAStatus = exports.generateTicketId = void 0;
-// Generate sequential ticket ID: SR-YYYYMM-001
-const generateTicketId = (year, month) => {
-    return `SR-${year}${String(month).padStart(2, '0')}-XXX`; // Replace XXX with seq later via aggregation
-};
-exports.generateTicketId = generateTicketId;
+exports.getPagination = exports.calcSLAStatus = void 0;
 // Calculate SLA breach
 const calcSLAStatus = (createdAt, targetDays = 3) => {
     const createdAtMs = new Date(createdAt).getTime();

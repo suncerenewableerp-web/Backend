@@ -54,6 +54,13 @@ async function seed() {
   // Permission Matrix (from provided RBAC table)
 const roles = await Role.insertMany([
     {
+      name: "SUPER_ADMIN",
+      label: "Super Admin",
+      description: "Full system access; sole authority to add or remove Admins",
+      isSystem: true,
+      permissions: Object.fromEntries(MODULES.map((m) => [m, full()])),
+    },
+    {
       name: "ADMIN",
       description: "Full system access",
       isSystem: true,

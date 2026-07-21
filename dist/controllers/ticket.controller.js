@@ -13,6 +13,8 @@ const CustomerCompany_model_1 = __importDefault(require("../models/CustomerCompa
 const Notification_model_1 = __importDefault(require("../models/Notification.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
+const ticketId_1 = require("../utils/ticketId");
+const sla_1 = require("../utils/sla");
 const cloudinary_1 = require("../config/cloudinary");
 const cloudinaryDownloadUrl_1 = require("../utils/cloudinaryDownloadUrl");
 const email_1 = require("../utils/email");
@@ -483,8 +485,17 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         body.salesAssigneeEmail = salesAssignee.email;
         body.salesAssigneeName = salesAssignee.name;
     }
+    // The ID is allocated server-side so numbering stays sequential and unique;
+    // anything the client sent is ignored.
+    delete body.ticketId;
+    // SLA deadline follows the ticket's own priority, not one blanket target.
+    const slaConfig = await (0, sla_1.loadSlaConfig)();
+    const createdAt = new Date();
     const ticket = await Ticket_model_1.default.create({
         ...body,
+        ticketId: await (0, ticketId_1.nextTicketId)(createdAt),
+        slaTargetDate: (0, sla_1.slaTargetDate)(createdAt, body?.issue?.priority, slaConfig),
+        slaStatus: 'OK',
         createdBy: req.user?._id,
         statusHistory: [{ status: 'CREATED', changedBy: req.user._id }]
     });
@@ -538,32 +549,10 @@ exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res
                 delete body.serviceType;
         }
     }
-    const ticketIds = bodies.map((b) => String(b.ticketId || "").trim());
-    const missingTicketId = ticketIds.findIndex((id) => !id);
-    if (missingTicketId !== -1) {
-        return res.status(400).json({
-            success: false,
-            message: `ticketId is required for each ticket (missing at index ${missingTicketId})`,
-        });
-    }
-    const uniq = new Set(ticketIds);
-    if (uniq.size !== ticketIds.length) {
-        return res.status(400).json({
-            success: false,
-            message: "Duplicate ticketId found in request payload",
-        });
-    }
-    const existing = await Ticket_model_1.default.find({ ticketId: { $in: ticketIds } }).select("ticketId").lean();
-    if (existing.length) {
-        const ids = existing
-            .map((r) => String(r?.ticketId || "").trim())
-            .filter(Boolean)
-            .slice(0, 10);
-        return res.status(400).json({
-            success: false,
-            message: `One or more ticketId already exists: ${ids.join(", ")}${existing.length > 10 ? "…" : ""}`,
-        });
-    }
+    // IDs are allocated server-side, so the client no longer supplies them and
+    // there is nothing to validate for uniqueness.
+    for (const body of bodies)
+        delete body.ticketId;
     // If a customer raises tickets, bind each row to their identity so they can
     // consistently see it later (and can't spoof another customer).
     if (roleName === "CUSTOMER") {
@@ -619,8 +608,14 @@ exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res
             body.salesAssigneeName = salesAssignee.name;
         }
     }
-    const payload = bodies.map((body) => ({
+    const bulkCreatedAt = new Date();
+    const bulkSlaConfig = await (0, sla_1.loadSlaConfig)();
+    const allocatedIds = await (0, ticketId_1.nextTicketIds)(bodies.length, bulkCreatedAt);
+    const payload = bodies.map((body, i) => ({
         ...body,
+        ticketId: allocatedIds[i],
+        slaTargetDate: (0, sla_1.slaTargetDate)(bulkCreatedAt, body?.issue?.priority, bulkSlaConfig),
+        slaStatus: "OK",
         createdBy: req.user?._id,
         statusHistory: [{ status: "CREATED", changedBy: req.user._id }],
     }));

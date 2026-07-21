@@ -9,6 +9,7 @@ const Role_model_1 = __importDefault(require("../models/Role.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
 const helpers_1 = require("../utils/helpers");
 const emailAddress_1 = require("../utils/emailAddress");
+const roleGuards_1 = require("../utils/roleGuards");
 const normalizeEmail = (email) => (0, emailAddress_1.normalizeEmailForStorage)(email);
 const normalizeOptionalString = (v) => {
     if (v === undefined || v === null)
@@ -56,6 +57,10 @@ exports.createUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     }
     if (!roleNorm) {
         return res.status(400).json({ success: false, message: "Role is required" });
+    }
+    const createDenied = (0, roleGuards_1.denyAdminManagement)(req.user, roleNorm);
+    if (createDenied) {
+        return res.status(403).json({ success: false, message: createDenied });
     }
     if (!phoneNorm) {
         return res.status(400).json({
@@ -175,6 +180,12 @@ exports.updateUserRole = (0, error_middleware_1.asyncHandler)(async (req, res) =
         return res.status(404).json({ success: false, message: "User not found" });
     }
     const currentRole = String(user?.role?.name || "").trim().toUpperCase();
+    // Granting or revoking an elevated role is Super Admin territory, whether the
+    // account is being promoted into one or moved out of one.
+    const roleChangeDenied = (0, roleGuards_1.denyAdminManagement)(req.user, roleNorm) || (0, roleGuards_1.denyAdminManagement)(req.user, currentRole);
+    if (roleChangeDenied) {
+        return res.status(403).json({ success: false, message: roleChangeDenied });
+    }
     if (currentRole === "ADMIN" && roleNorm !== "ADMIN") {
         const adminRole = await Role_model_1.default.findOne({ name: "ADMIN" }).select("_id").lean();
         const adminCount = adminRole?._id
@@ -209,6 +220,10 @@ exports.deleteUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found" });
     }
     const targetRole = String(user?.role?.name || "").trim().toUpperCase();
+    const deleteDenied = (0, roleGuards_1.denyAdminManagement)(req.user, targetRole);
+    if (deleteDenied) {
+        return res.status(403).json({ success: false, message: deleteDenied });
+    }
     if (targetRole === "ADMIN") {
         const adminRole = await Role_model_1.default.findOne({ name: "ADMIN" }).select("_id").lean();
         const adminCount = adminRole?._id

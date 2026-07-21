@@ -67,6 +67,10 @@ const TICKET_LIST_SELECT = [
     "createdAt",
     "updatedAt",
     "slaStatus",
+    // Only these two subfields, so SLA can tell when a ticket closed without
+    // pulling the whole history array for every row.
+    "statusHistory.status",
+    "statusHistory.changedAt",
 ].join(" ");
 const CUSTOMER_TICKET_LIST_SELECT = TICKET_LIST_SELECT.replace("inverter.warrantyEnd", "");
 function toIdString(v) {
@@ -239,10 +243,13 @@ async function computeAutoWarrantyEnd(prefix) {
 exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const { page = 1, limit = 20, status, priority, slaStatus, search } = req.query;
     const { skip, limit: lim } = (0, helpers_1.getPagination)(page, limit);
+    // slaStatus is derived from priority and elapsed time, not read from the
+    // stored field (which nothing keeps current), so it cannot be part of the
+    // database query — it is applied after the rows come back.
+    const wantedSla = String(slaStatus || "").trim().toUpperCase();
     const query = {
         ...(status && { status }),
         ...(priority && { 'issue.priority': priority }),
-        ...(slaStatus && { slaStatus }),
         ...(search && { $or: [
                 { ticketId: { $regex: search, $options: 'i' } },
                 { 'customer.name': { $regex: search, $options: 'i' } },
@@ -299,16 +306,36 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             ...(existingSearchOr ? [{ $or: existingSearchOr }] : []),
         ];
     }
-    const ticketsQuery = Ticket_model_1.default.find(query)
+    const baseQuery = Ticket_model_1.default.find(query)
         .select(roleName === "CUSTOMER" ? CUSTOMER_TICKET_LIST_SELECT : TICKET_LIST_SELECT)
         .populate('createdBy', 'email name phone')
         .populate('assignedTo', 'name')
         .populate('salesAssignee', 'name email')
-        .sort('-createdAt')
-        .skip(skip)
-        .limit(lim)
-        .lean();
-    const tickets = await ticketsQuery;
+        .sort('-createdAt');
+    const slaConfig = await (0, sla_1.loadSlaConfig)();
+    const withSla = (rows) => rows.map((t) => ({
+        ...t,
+        slaStatus: (0, sla_1.computeSlaStatus)({
+            createdAt: t?.createdAt,
+            priority: t?.issue?.priority,
+            config: slaConfig,
+            closedAt: (0, sla_1.closedAtOf)(t),
+        }),
+    }));
+    // Filtering by SLA means every matching row has to be scored first, so
+    // pagination is applied afterwards instead of in the database.
+    if (wantedSla) {
+        const scored = withSla(await baseQuery.lean()).filter((t) => t.slaStatus === wantedSla);
+        const total = scored.length;
+        return res.json({
+            success: true,
+            data: {
+                tickets: scored.slice(skip, skip + lim),
+                pagination: { total, page: parseInt(page), limit: lim, pages: Math.ceil(total / lim) },
+            },
+        });
+    }
+    const tickets = withSla(await baseQuery.skip(skip).limit(lim).lean());
     const total = await Ticket_model_1.default.countDocuments(query);
     res.json({
         success: true,

@@ -8,7 +8,7 @@ import Notification from "../models/Notification.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
 import { nextTicketId, nextTicketIds } from "../utils/ticketId";
-import { loadSlaConfig, slaTargetDate } from "../utils/sla";
+import { closedAtOf, computeSlaStatus, loadSlaConfig, slaTargetDate } from "../utils/sla";
 import { cloudinary, ensureCloudinaryConfigured } from "../config/cloudinary";
 import { mapCloudinaryDocUrls, toCloudinaryPrivateDownloadUrl } from "../utils/cloudinaryDownloadUrl";
 import { sendEmail } from "../utils/email";
@@ -64,6 +64,10 @@ const TICKET_LIST_SELECT = [
   "createdAt",
   "updatedAt",
   "slaStatus",
+  // Only these two subfields, so SLA can tell when a ticket closed without
+  // pulling the whole history array for every row.
+  "statusHistory.status",
+  "statusHistory.changedAt",
 ].join(" ");
 
 const CUSTOMER_TICKET_LIST_SELECT = TICKET_LIST_SELECT.replace("inverter.warrantyEnd", "");
@@ -252,10 +256,14 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
   const { page = 1, limit = 20, status, priority, slaStatus, search } = req.query;
   const { skip, limit: lim } = getPagination(page, limit);
   
-  const query: Record<string, any> = { 
+  // slaStatus is derived from priority and elapsed time, not read from the
+  // stored field (which nothing keeps current), so it cannot be part of the
+  // database query — it is applied after the rows come back.
+  const wantedSla = String(slaStatus || "").trim().toUpperCase();
+
+  const query: Record<string, any> = {
     ...(status && { status }),
     ...(priority && { 'issue.priority': priority }),
-    ...(slaStatus && { slaStatus }),
     ...(search && { $or: [
       { ticketId: { $regex: search, $options: 'i' } },
       { 'customer.name': { $regex: search, $options: 'i' } },
@@ -314,20 +322,42 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
     ];
   }
 
-  const ticketsQuery = Ticket.find(query)
+  const baseQuery = Ticket.find(query)
     .select(roleName === "CUSTOMER" ? CUSTOMER_TICKET_LIST_SELECT : TICKET_LIST_SELECT)
     .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
     .populate('salesAssignee', 'name email')
-    .sort('-createdAt')
-    .skip(skip)
-    .limit(lim)
-    .lean();
+    .sort('-createdAt');
 
-  const tickets = await ticketsQuery;
-    
+  const slaConfig = await loadSlaConfig();
+  const withSla = (rows: any[]) =>
+    rows.map((t) => ({
+      ...t,
+      slaStatus: computeSlaStatus({
+        createdAt: t?.createdAt,
+        priority: t?.issue?.priority,
+        config: slaConfig,
+        closedAt: closedAtOf(t),
+      }),
+    }));
+
+  // Filtering by SLA means every matching row has to be scored first, so
+  // pagination is applied afterwards instead of in the database.
+  if (wantedSla) {
+    const scored = withSla(await baseQuery.lean()).filter((t) => t.slaStatus === wantedSla);
+    const total = scored.length;
+    return res.json({
+      success: true,
+      data: {
+        tickets: scored.slice(skip, skip + lim),
+        pagination: { total, page: parseInt(page), limit: lim, pages: Math.ceil(total / lim) },
+      },
+    });
+  }
+
+  const tickets = withSla(await baseQuery.skip(skip).limit(lim).lean());
   const total = await Ticket.countDocuments(query);
-  
+
   res.json({
     success: true,
     data: {

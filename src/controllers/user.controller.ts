@@ -3,7 +3,7 @@ import Role from "../models/Role.model";
 import { asyncHandler } from "../middleware/error.middleware";
 import { getPagination } from "../utils/helpers";
 import { emailLookupCandidates, normalizeEmailForStorage } from "../utils/emailAddress";
-import { denyAdminManagement } from "../utils/roleGuards";
+import { denyAdminManagement, isSuperAdmin } from "../utils/roleGuards";
 
 const normalizeEmail = (email: unknown) => normalizeEmailForStorage(email);
 const normalizeOptionalString = (v: unknown) => {
@@ -256,9 +256,12 @@ export const deleteUser = asyncHandler(async (req: any, res: any) => {
 
   const targetRole = String(user?.role?.name || "").trim().toUpperCase();
 
-  const deleteDenied = denyAdminManagement(req.user, targetRole);
-  if (deleteDenied) {
-    return res.status(403).json({ success: false, message: deleteDenied });
+  // Deleting any account is Super Admin only, whatever role the target holds.
+  if (!isSuperAdmin(req.user)) {
+    return res.status(403).json({
+      success: false,
+      message: "Only a Super Admin can delete user accounts.",
+    });
   }
 
   if (targetRole === "ADMIN") {

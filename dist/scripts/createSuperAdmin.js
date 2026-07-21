@@ -19,10 +19,19 @@ const MODULES = [
 ];
 const fullPermissions = () => Object.fromEntries(MODULES.map((m) => [m, { view: true, create: true, edit: true, delete: true }]));
 function usage() {
-    console.log("Usage: npm run create:superadmin -- <email>");
+    console.log("Usage: npm run create:superadmin -- <email> [options]");
     console.log("");
-    console.log("Ensures the SUPER_ADMIN role exists with full access, then assigns");
-    console.log("it to the user with the given email. Safe to run more than once.");
+    console.log("Ensures the SUPER_ADMIN role exists with full access, then assigns it");
+    console.log("to the given account. Safe to run more than once.");
+    console.log("");
+    console.log("If the account does not exist yet, supply all three to create it:");
+    console.log("  --name  <full name>");
+    console.log("  --phone <phone number>");
+    console.log("  --password <password>   (min 6 characters)");
+}
+function flag(name) {
+    const i = process.argv.indexOf(`--${name}`);
+    return i !== -1 ? String(process.argv[i + 1] || "").trim() : "";
 }
 async function main() {
     const email = String(process.argv[2] || process.env.SUPER_ADMIN_EMAIL || "")
@@ -53,18 +62,41 @@ async function main() {
         });
         console.log("✔ SUPER_ADMIN role created");
     }
-    // 2. Assign it to the requested account.
+    // 2. Assign it to the requested account, creating the account if needed.
     const user = await User_model_1.default.findOne({ email }).collation({ locale: "en", strength: 2 });
-    if (!user) {
-        console.error(`✖ No user found with email ${email}.`);
-        console.error("  Create the account first, then re-run this script.");
+    if (user) {
+        const previousRole = await Role_model_1.default.findById(user.role).select("name").lean();
+        user.role = role._id;
+        user.isActive = true;
+        await user.save();
+        console.log(`✔ ${user.name} <${email}> is now SUPER_ADMIN (was ${previousRole?.name || "none"})`);
+        await mongoose_1.default.disconnect();
+        return;
+    }
+    const name = flag("name");
+    const phone = flag("phone");
+    const password = flag("password");
+    if (!name || !phone || !password) {
+        console.error(`✖ No account exists for ${email}, and it cannot be created.`);
+        console.error("  Pass --name, --phone and --password to create it.");
         await mongoose_1.default.disconnect();
         process.exit(1);
     }
-    const previousRole = await Role_model_1.default.findById(user.role).select("name").lean();
-    user.role = role._id;
-    await user.save();
-    console.log(`✔ ${user.name} <${email}> is now SUPER_ADMIN (was ${previousRole?.name || "none"})`);
+    if (password.length < 6) {
+        console.error("✖ Password must be at least 6 characters.");
+        await mongoose_1.default.disconnect();
+        process.exit(1);
+    }
+    // The User model hashes the password in a pre-save hook, so it is passed raw.
+    const created = await User_model_1.default.create({
+        name,
+        email,
+        password,
+        phone,
+        role: role._id,
+        company: "Sunce Renewables",
+    });
+    console.log(`✔ Created ${created.name} <${email}> as SUPER_ADMIN`);
     await mongoose_1.default.disconnect();
 }
 main().catch(async (err) => {

@@ -220,9 +220,12 @@ exports.deleteUser = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found" });
     }
     const targetRole = String(user?.role?.name || "").trim().toUpperCase();
-    const deleteDenied = (0, roleGuards_1.denyAdminManagement)(req.user, targetRole);
-    if (deleteDenied) {
-        return res.status(403).json({ success: false, message: deleteDenied });
+    // Deleting any account is Super Admin only, whatever role the target holds.
+    if (!(0, roleGuards_1.isSuperAdmin)(req.user)) {
+        return res.status(403).json({
+            success: false,
+            message: "Only a Super Admin can delete user accounts.",
+        });
     }
     if (targetRole === "ADMIN") {
         const adminRole = await Role_model_1.default.findOne({ name: "ADMIN" }).select("_id").lean();

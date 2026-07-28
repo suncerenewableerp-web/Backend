@@ -32,7 +32,7 @@ const ASSUMED_DISPATCH_LAG_DAYS = 7; // UNDER_DISPATCH → DISPATCHED assumed
 // The system already treats "6 months" as 180 days elsewhere, so we keep it consistent.
 const WARRANTY_AFTER_DISPATCH_DAYS = 187; // 180 + 7
 
-const TICKET_LIST_SELECT = [
+const TICKET_LIST_FIELDS = [
   "ticketId",
   "serviceType",
   "createdBy",
@@ -62,9 +62,21 @@ const TICKET_LIST_SELECT = [
   "createdAt",
   "updatedAt",
   "slaStatus",
-].join(" ");
+  // Needed to derive the per-stage entry dates (Under Repair / Under Dispatch /
+  // Dispatched / Closed) shown alongside Ticket Date in the tickets list. Only these two
+  // subfields — the imported `notes` blobs alone would add ~570KB to an admin's list load,
+  // and `changedBy` is not needed client-side.
+  "statusHistory.status",
+  "statusHistory.changedAt",
+];
 
-const CUSTOMER_TICKET_LIST_SELECT = TICKET_LIST_SELECT.replace("inverter.warrantyEnd", "");
+const TICKET_LIST_SELECT = TICKET_LIST_FIELDS.join(" ");
+
+// Customers see neither warranty end nor the stage-date columns, so drop both rather than
+// shipping history they cannot use.
+const CUSTOMER_TICKET_LIST_SELECT = TICKET_LIST_FIELDS.filter(
+  (field) => field !== "inverter.warrantyEnd" && !field.startsWith("statusHistory"),
+).join(" ");
 
 function toIdString(v: any): string {
   if (!v) return "";
@@ -117,6 +129,60 @@ function addDays(d: Date, days: number) {
 
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// "SUPER ADMIN" / "super-admin" / "Super_Admin" all normalize to SUPER_ADMIN.
+function normalizeRoleName(raw: any): string {
+  return String(raw || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+// The admin tier. SUPER_ADMIN ("Full system access; sole authority to add or remove
+// Admins") is a real role in this deployment, so anywhere ADMIN is treated as the top
+// authority it has to be included too.
+function isAdminTierRole(roleRaw: any): boolean {
+  const role = normalizeRoleName(roleRaw);
+  return role === "ADMIN" || role === "SUPER_ADMIN";
+}
+
+// Parse an admin-supplied raise date ("YYYY-MM-DD").
+//
+// The rest of the app renders a ticket's raise date by slicing the stored ISO string
+// (`createdAt.slice(0, 10)`), i.e. it reads the UTC calendar date. We therefore rebuild
+// the timestamp in UTC and carry the original time-of-day over, so the saved date reads
+// back exactly as picked while preserving same-day ordering against other records.
+function parseRaiseDate(raw: any, previous: any): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(raw || "").trim());
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const prev = previous instanceof Date && !Number.isNaN(previous.getTime()) ? previous : null;
+  const next = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day,
+      prev ? prev.getUTCHours() : 0,
+      prev ? prev.getUTCMinutes() : 0,
+      prev ? prev.getUTCSeconds() : 0,
+      prev ? prev.getUTCMilliseconds() : 0,
+    ),
+  );
+
+  // Reject impossible dates that would otherwise roll over (e.g. 2026-02-31 → March).
+  if (
+    next.getUTCFullYear() !== year ||
+    next.getUTCMonth() !== month - 1 ||
+    next.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return next;
 }
 
 function normalizeCompanyKey(input: any): string | null {
@@ -744,7 +810,7 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   if (roleNorm === "ENGINEER" && String(ticket.status || "").toUpperCase() === "CLOSED") {
     return res.status(400).json({ success: false, message: "Closed tickets are read-only for engineers." });
   }
-  const isTicketAdmin = roleNorm === "ADMIN" || roleNorm === "SALES";
+  const isTicketAdmin = isAdminTierRole(roleNorm) || roleNorm === "SALES";
   const ALLOWED_STATUSES = new Set([
     'CREATED',
     'PICKUP_SCHEDULED',
@@ -778,6 +844,33 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
   if (!isTicketAdmin && roleNorm !== 'ENGINEER') {
     // Customers and unknown roles should never reach here (RBAC), but keep hard guard.
     return res.status(403).json({ success: false, message: 'Access denied.' });
+  }
+
+  // Ticket raise date (createdAt) is editable by the admin tier only — notably NOT by
+  // SALES, who can otherwise edit every other ticket detail.
+  if (Object.prototype.hasOwnProperty.call(body, 'createdAt')) {
+    if (!isAdminTierRole(roleName)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: only Admin and Super Admin can change the ticket raise date.',
+      });
+    }
+    const nextCreatedAt = parseRaiseDate(body.createdAt, (ticket as any).createdAt);
+    if (!nextCreatedAt) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ticket raise date. Expected a valid date in YYYY-MM-DD format.',
+      });
+    }
+    if (nextCreatedAt.getTime() > Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ticket raise date cannot be in the future.',
+      });
+    }
+    // `createdAt` is immutable by default under mongoose `timestamps`, so this deliberate
+    // admin correction has to opt out explicitly.
+    ticket.set('createdAt', nextCreatedAt, { overwriteImmutable: true });
   }
 
   const prevStatus = ticket.status;

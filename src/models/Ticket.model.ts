@@ -108,6 +108,11 @@ const ticketSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// NOTE: `createdAt` doubles as the business "ticket raise date", which Admin / Super Admin
+// can correct (see updateTicket). Mongoose marks the `timestamps` createdAt path immutable,
+// so those writes must pass `{ overwriteImmutable: true }`; leave the path immutable here so
+// every other code path still cannot touch it.
+
 // Index for fast queries
 ticketSchema.index({ status: 1, priority: 1 });
 ticketSchema.index({ 'customer.phone': 1 });

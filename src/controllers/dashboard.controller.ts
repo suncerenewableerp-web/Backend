@@ -476,6 +476,11 @@ export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
   // null means no date cap (period = "all").
   let periodEnd: Date | null = null;
   let periodStart: Date | null = null;
+  // Start of the selected window, tracked separately from `periodStart` because the
+  // cumulative periods below intentionally leave `periodStart` unset (they report the
+  // state as of `periodEnd`, not just what was created inside the window). We only use
+  // this to detect a period that hasn't begun yet.
+  let windowStart: Date | null = null;
   if (period === "weekly") {
     const now = new Date();
     periodEnd = now;
@@ -492,6 +497,7 @@ export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
   } else if (period === "monthly") {
     const win = computePeriodWindow({ period: "monthly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
     periodEnd = win.toExclusive;
+    windowStart = win.from;
   } else if (period === "quarterly") {
     periodEnd = new Date(); // rolling
   } else if (period === "halfyearly") {
@@ -499,6 +505,18 @@ export const getInventorySummary = asyncHandler(async (req: any, res: any) => {
   } else if (period === "yearly") {
     const win = computePeriodWindow({ period: "yearly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
     periodEnd = win.toExclusive;
+    windowStart = win.from;
+  }
+
+  // A period that has not started yet holds no records, so report zeros. Without this
+  // guard the "tickets that existed by period end" match below (`createdAt < periodEnd`)
+  // would match every ticket ever created for a future month/year, making the dashboard
+  // show the current totals instead of 0.
+  if (windowStart && windowStart.getTime() > Date.now()) {
+    return res.json({
+      success: true,
+      data: { total: 0, vendors: [], models: [], statuses: [], customers: [] },
+    });
   }
 
   // Base match: all tickets that existed by period end (vendor / model / customer don't change).

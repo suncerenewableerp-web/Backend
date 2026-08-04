@@ -53,6 +53,11 @@ const ticketSchema = new mongoose_1.default.Schema({
         },
         photos: [String] // S3/CDN URLs
     },
+    // Free-text remarks that apply to any ticket type (standard single/bulk as well as
+    // on-site). `onsite.remark` stays separate: it is the engineer's visit note captured
+    // during the offline-booking flow, whereas this is the ticket-level remark entered at
+    // creation or edited later from the ticket detail page.
+    remarks: { type: String, trim: true, default: '' },
     status: {
         type: String,
         enum: [

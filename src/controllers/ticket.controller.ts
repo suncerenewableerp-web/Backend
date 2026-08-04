@@ -53,6 +53,8 @@ const TICKET_LIST_FIELDS = [
   "issue.description",
   "issue.errorCode",
   "issue.priority",
+  // Ticket-level remark shown in the tickets list / Excel export for every service type.
+  "remarks",
   "status",
   "assignedTo",
   "salesAssignee",
@@ -1019,6 +1021,9 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
       if (Object.prototype.hasOwnProperty.call(body.issue, 'photos')) ticket.set('issue.photos', body.issue.photos);
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, 'remarks')) {
+      ticket.set('remarks', String(body.remarks ?? '').trim());
+    }
     if (Object.prototype.hasOwnProperty.call(body, 'assignedTo')) ticket.set('assignedTo', body.assignedTo);
     if (Object.prototype.hasOwnProperty.call(body, 'customerFeedback')) ticket.set('customerFeedback', body.customerFeedback);
     if (Object.prototype.hasOwnProperty.call(body, 'feedbackRating')) ticket.set('feedbackRating', body.feedbackRating);

@@ -74,12 +74,15 @@ exports.getReports = (0, error_middleware_1.asyncHandler)(async (req, res) => {
             { $match: matchAll },
             {
                 $project: {
+                    // Warranty as of the ticket's raise date, not today — the same rule the ticket
+                    // list and dashboard apply. Measuring against `now` made this breakdown shift on
+                    // its own as coverage lapsed, and disagree with the per-ticket warranty badges.
                     inWarranty: {
                         $cond: [
                             {
                                 $and: [
                                     { $ifNull: ['$inverter.warrantyEnd', false] },
-                                    { $gte: ['$inverter.warrantyEnd', now] },
+                                    { $gte: ['$inverter.warrantyEnd', '$createdAt'] },
                                 ],
                             },
                             1,

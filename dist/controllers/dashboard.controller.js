@@ -161,6 +161,20 @@ function computePeriodWindow(input) {
         toYmd: `${y}-${pad2(m)}-${pad2(toDay)}`,
     };
 }
+// Calendar quarter containing `month` of `year`, defaulting to the current month/year in `tz`.
+// `computePeriodWindow` has no QUARTERLY kind because no report offers a quarter option; the
+// inventory summary does, and derives the quarter from the selected month.
+function computeQuarterWindow(year, month, tz) {
+    const now = new Date();
+    const nowYmd = formatDayKeyInTz(now, tz);
+    const y = toIntOrNull(year) || Number(nowYmd.slice(0, 4)) || now.getFullYear();
+    const m = Math.min(12, Math.max(1, toIntOrNull(month) || Number(nowYmd.slice(5, 7)) || now.getMonth() + 1));
+    const startMonth = Math.floor((m - 1) / 3) * 3 + 1; // 1, 4, 7 or 10
+    return {
+        from: dateStartInTzIso(y, startMonth, 1, tz),
+        toExclusive: startMonth === 10 ? dateStartInTzIso(y + 1, 1, 1, tz) : dateStartInTzIso(y, startMonth + 3, 1, tz),
+    };
+}
 function formatDayKeyInTz(d, tz) {
     try {
         const parts = new Intl.DateTimeFormat("en-CA", {
@@ -427,23 +441,18 @@ exports.getServicingStatus = (0, error_middleware_1.asyncHandler)(async (req, re
 // @desc    Inventory summary — vendor / model / status counts (optionally period-filtered)
 // @route   GET /api/dashboard/inventory-summary?period=all|weekly|monthly|yearly&year=2026&month=6&tz=Asia/Kolkata
 //
-// For non-"all" periods the query shows the state of ALL tickets on the LAST DAY of the period,
-// not just tickets created within the period:
-//   - vendor / model / customer: tickets that existed by period end (createdAt < periodEnd)
-//   - status: each ticket's status AS OF the last day, reconstructed from statusHistory
+// Every non-"all" period reports ONLY the tickets raised inside that window
+// (periodStart <= createdAt < periodEnd) — picking June shows June, never a running total
+// carried over from earlier months. This matches the dashboard drill-down modal, which has
+// always filtered its ticket rows to the selected window; the summary counts used to be
+// cumulative, so a slice and its drill-down disagreed.
 exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const tz = safeTz(req.query?.tz);
     const scope = ticketScopeQuery(req.user);
     const period = String(req.query?.period || "all").trim().toLowerCase();
-    // Compute the exclusive upper bound for "tickets that existed by period end".
-    // null means no date cap (period = "all").
-    let periodEnd = null;
+    // Bounds of the selected window. Both stay null only for period = "all" (no date cap).
     let periodStart = null;
-    // Start of the selected window, tracked separately from `periodStart` because the
-    // cumulative periods below intentionally leave `periodStart` unset (they report the
-    // state as of `periodEnd`, not just what was created inside the window). We only use
-    // this to detect a period that hasn't begun yet.
-    let windowStart = null;
+    let periodEnd = null;
     if (period === "weekly") {
         const now = new Date();
         periodEnd = now;
@@ -461,33 +470,43 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
     }
     else if (period === "monthly") {
         const win = computePeriodWindow({ period: "monthly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
+        periodStart = win.from;
         periodEnd = win.toExclusive;
-        windowStart = win.from;
     }
     else if (period === "quarterly") {
-        periodEnd = new Date(); // rolling
+        // No quarter selector in the UI: the quarter is the one containing the selected month,
+        // the same rule the drill-down modal applies.
+        const win = computeQuarterWindow(req.query?.year, req.query?.month, tz);
+        periodStart = win.from;
+        periodEnd = win.toExclusive;
     }
     else if (period === "halfyearly") {
-        periodEnd = new Date(); // rolling
+        const win = computePeriodWindow({ period: "halfyearly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
+        periodStart = win.from;
+        periodEnd = win.toExclusive;
     }
     else if (period === "yearly") {
         const win = computePeriodWindow({ period: "yearly", year: req.query?.year, month: req.query?.month, fortnight: null, tz });
+        periodStart = win.from;
         periodEnd = win.toExclusive;
-        windowStart = win.from;
     }
-    // A period that has not started yet holds no records, so report zeros. Without this
-    // guard the "tickets that existed by period end" match below (`createdAt < periodEnd`)
-    // would match every ticket ever created for a future month/year, making the dashboard
-    // show the current totals instead of 0.
-    if (windowStart && windowStart.getTime() > Date.now()) {
+    // A period that has not started yet holds no records; short-circuit the four
+    // aggregations below rather than running them for a guaranteed-empty window.
+    if (periodStart && periodStart.getTime() > Date.now()) {
         return res.json({
             success: true,
             data: { total: 0, vendors: [], models: [], statuses: [], customers: [] },
         });
     }
-    // Base match: all tickets that existed by period end (vendor / model / customer don't change).
-    const baseMatch = periodEnd
-        ? { ...scope, createdAt: { $lt: periodEnd, ...(periodStart ? { $gte: periodStart } : {}) } }
+    // Base match: tickets raised inside the selected window.
+    const baseMatch = periodStart || periodEnd
+        ? {
+            ...scope,
+            createdAt: {
+                ...(periodStart ? { $gte: periodStart } : {}),
+                ...(periodEnd ? { $lt: periodEnd } : {}),
+            },
+        }
         : { ...scope };
     const normalizeStr = (v, fallback) => {
         const raw = String(v || "").trim();
@@ -495,53 +514,15 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
             return fallback;
         return raw;
     };
-    // Status aggregation: for non-"all" periods reconstruct status AS OF periodEnd from statusHistory.
-    // Logic: take the most recent statusHistory entry with changedAt < periodEnd; if none exists,
-    // the ticket hadn't changed status yet → use the current $status field (initial state).
-    const statusAggregation = periodEnd
-        ? Ticket_model_1.default.aggregate([
-            { $match: baseMatch },
-            {
-                $addFields: {
-                    _histBefore: {
-                        $filter: {
-                            input: { $ifNull: ["$statusHistory", []] },
-                            as: "h",
-                            cond: { $lt: ["$$h.changedAt", periodEnd] },
-                        },
-                    },
-                },
-            },
-            { $addFields: { _maxChangedAt: { $max: "$_histBefore.changedAt" } } },
-            {
-                $addFields: {
-                    _latestEntry: {
-                        $arrayElemAt: [
-                            {
-                                $filter: {
-                                    input: "$_histBefore",
-                                    as: "h",
-                                    cond: { $eq: ["$$h.changedAt", "$_maxChangedAt"] },
-                                },
-                            },
-                            0,
-                        ],
-                    },
-                },
-            },
-            {
-                $addFields: {
-                    _statusAtEnd: { $ifNull: ["$_latestEntry.status", "$status"] },
-                },
-            },
-            { $group: { _id: "$_statusAtEnd", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-        ])
-        : Ticket_model_1.default.aggregate([
-            { $match: baseMatch },
-            { $group: { _id: "$status", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-        ]);
+    // Status of the tickets raised in the window, as it stands now. (This used to
+    // reconstruct each ticket's status as of the last day of the period from statusHistory —
+    // that belonged to the cumulative "snapshot at period end" model, and it left the status
+    // slices disagreeing with the drill-down list, which filters on current status.)
+    const statusAggregation = Ticket_model_1.default.aggregate([
+        { $match: baseMatch },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+    ]);
     const [vendorRows, modelRows, statusRows, customerRows] = await Promise.all([
         Ticket_model_1.default.aggregate([
             { $match: baseMatch },

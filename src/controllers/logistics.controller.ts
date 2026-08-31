@@ -694,7 +694,10 @@ export const scheduleDispatch = asyncHandler(async (req: any, res: any) => {
 // @route   GET /api/logistics/pending-dispatch-approvals
 export const getPendingDispatchApprovals = asyncHandler(async (req: any, res: any) => {
   const roleName = String(req.user?.role?.name || "").toUpperCase();
-  if (roleName !== "ADMIN" && roleName !== "SALES") {
+  // Read-only list, gated by `logistics:view` on the route. Approving/rejecting is still
+  // ADMIN-only (see approveDispatch / rejectDispatch). Blocking ENGINEER here made the
+  // dashboard's "Under Approval" card read 0 for them while Admin saw the real count.
+  if (roleName === "CUSTOMER") {
     return res.status(403).json({ success: false, message: "Access denied." });
   }
 

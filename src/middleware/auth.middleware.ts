@@ -56,7 +56,16 @@ export const authorize = (module: string, action: string) => {
       // Business rule: SALES must be able to view engineer jobcard details for a ticket.
       if (module === "jobcard" && action === "view") return next();
     }
-    
+
+    // Business rule: ENGINEER must be able to read job cards. The dashboard's "Under
+    // Progress" tile splits the workshop into Under repair / Repaired / Scrap purely from
+    // job-card outcomes, so a 403 here collapses that split to "everything is under
+    // repair" (265 / 0 / 0) instead of the real 94 / 19 / 152 — and the Tickets list and
+    // its Excel export lose the Scrap label the same way. Not left to the role matrix
+    // because a role edited in Role Builder can silently drop the flag.
+    if (roleName === "ENGINEER" && module === "jobcard" && action === "view") return next();
+
+
     if (!role.permissions[module]?.[action]) {
       return res.status(403).json({
         success: false,

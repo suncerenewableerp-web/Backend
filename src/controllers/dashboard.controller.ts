@@ -17,29 +17,18 @@ function toPositiveInt(v: any) {
 //
 // This MUST stay identical to the rule `getTickets` (ticket.controller.ts) applies to the
 // tickets list, otherwise the dashboard cards count a different set of tickets than the
-// list they link to. Engineers in particular used to be scoped to `assignedTo` alone here,
-// while their list also shows every non-on-site ticket in the workshop plus every ticket
-// whose job card they finalised — so every card on their dashboard disagreed with the
-// list, the tabs and the drill-down modals.
+// list they link to.
 //
-// Async because the engineer rule needs the job cards they finalised.
+// ENGINEER is deliberately NOT scoped: an engineer's dashboard has to report the same
+// operational picture as Admin's. Scoping them to "workshop tickets + their own
+// assignments + job cards they finalised" meant an engineer saw only the slice of the
+// pipeline they had touched — 578 tickets against Admin's 3242, 32 under dispatch
+// against 42 — so Outward, Resolved, Total and Under Warranty all read lower on their
+// dashboard than on Admin's for the very same data.
+//
+// Async because the customer rule stays per-user and callers already await this.
 async function ticketScopeQuery(user: any) {
   const roleName = String(user?.role?.name || "").trim().toUpperCase();
-
-  if (roleName === "ENGINEER") {
-    const finalizedRows = await JobCard.find({ engineerFinalizedBy: user._id })
-      .select("ticket")
-      .lean();
-    const finalizedTicketIds = Array.from(
-      new Set((finalizedRows || []).map((r: any) => String(r?.ticket || "")).filter(Boolean)),
-    );
-
-    // On-site (offline booking) tickets stay visible only to the assigned engineer.
-    const visibilityOr: any[] = [{ status: "UNDER_REPAIRED", serviceType: { $ne: "ONSITE" } }];
-    if (finalizedTicketIds.length) visibilityOr.push({ _id: { $in: finalizedTicketIds } });
-    visibilityOr.push({ assignedTo: user._id });
-    return { $or: visibilityOr };
-  }
 
   if (roleName === "CUSTOMER") {
     const email = user?.email ? String(user.email).trim().toLowerCase() : "";

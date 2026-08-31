@@ -1,11 +1,11 @@
 import Ticket from "../models/Ticket.model";
 import { asyncHandler } from "../middleware/error.middleware";
 
-function ticketScopeQuery(user: any) {
+async function ticketScopeQuery(user: any) {
   const roleName = user?.role?.name;
-  if (roleName === "ENGINEER") {
-    return { assignedTo: user._id };
-  }
+  // ENGINEER is unscoped, matching the tickets list and the dashboard. The SLA Monitor tab
+  // is on the engineer's nav (the role carries `sla:view`), so scoping it here made that
+  // visible tab report a smaller total than Admin's for the same period.
   if (roleName === "CUSTOMER") {
     const legacyMatch: Record<string, any> =
       user?.phone
@@ -25,7 +25,7 @@ function ticketScopeQuery(user: any) {
 // @desc    Get SLA overview
 // @route   GET /api/sla
 export const getSLAOverview = asyncHandler(async (req: any, res: any) => {
-  const tickets = await Ticket.find(ticketScopeQuery(req.user)).select('createdAt ticketId slaStatus');
+  const tickets = await Ticket.find(await ticketScopeQuery(req.user)).select('createdAt ticketId slaStatus');
   const stats = {
     total: tickets.length,
     ok: tickets.filter(t => t.slaStatus === 'OK').length,

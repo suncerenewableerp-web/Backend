@@ -21,9 +21,9 @@ function addMonthsUTC(date, deltaMonths) {
 
 function buildTicketVisibilityQuery(user) {
   const roleName = user?.role?.name;
-  if (roleName === 'ENGINEER') {
-    return { assignedTo: user._id };
-  }
+  // ENGINEER is unscoped, matching the tickets list and the dashboard. It used to be
+  // narrowed to `assignedTo` alone, which was narrower still than either of those, so an
+  // engineer's Reports totals disagreed with both their own dashboard and Admin's.
   if (roleName === 'CUSTOMER') {
     if (user.company) return { 'customer.company': user.company };
     return { 'customer.name': user.name };

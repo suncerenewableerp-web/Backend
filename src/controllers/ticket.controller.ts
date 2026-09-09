@@ -60,6 +60,7 @@ const TICKET_LIST_FIELDS = [
   "salesAssignee",
   "salesAssigneeEmail",
   "salesAssigneeName",
+  "deliveryMethod",
   "logistics",
   "createdAt",
   "updatedAt",
@@ -547,15 +548,23 @@ export const createTicket = asyncHandler(async (req: any, res: any) => {
     };
   }
 
-  // Auto-assign Sales owner based on customer company → rep mapping.
+  // Auto-assign Sales owner based on customer company → rep mapping, but allow
+  // a manually-entered salesAssigneeName (when the user selects "Other") to take precedence.
   if (Object.prototype.hasOwnProperty.call(body, "salesAssignee")) delete body.salesAssignee;
   if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeEmail")) delete body.salesAssigneeEmail;
+  const customSalesName = String(body?.salesAssigneeName || "").trim();
   if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeName")) delete body.salesAssigneeName;
   const salesAssignee = await resolveSalesAssigneeForCompany(body?.customer?.company);
   if (salesAssignee) {
     if (salesAssignee.userId) body.salesAssignee = salesAssignee.userId;
     body.salesAssigneeEmail = salesAssignee.email;
     body.salesAssigneeName = salesAssignee.name;
+  }
+  // If user explicitly provided a custom sales owner name (Other), override the auto-resolved one.
+  if (customSalesName) {
+    body.salesAssigneeName = customSalesName;
+    delete body.salesAssignee;
+    delete body.salesAssigneeEmail;
   }
 
   const ticket = await Ticket.create({
@@ -1000,6 +1009,8 @@ export const updateTicket = asyncHandler(async (req: any, res: any) => {
       ticket.set('remarks', String(body.remarks ?? '').trim());
     }
     if (Object.prototype.hasOwnProperty.call(body, 'assignedTo')) ticket.set('assignedTo', body.assignedTo);
+    if (Object.prototype.hasOwnProperty.call(body, 'salesAssigneeName')) ticket.set('salesAssigneeName', String(body.salesAssigneeName || '').trim());
+    if (Object.prototype.hasOwnProperty.call(body, 'deliveryMethod')) ticket.set('deliveryMethod', String(body.deliveryMethod || '').trim());
     if (Object.prototype.hasOwnProperty.call(body, 'customerFeedback')) ticket.set('customerFeedback', body.customerFeedback);
     if (Object.prototype.hasOwnProperty.call(body, 'feedbackRating')) ticket.set('feedbackRating', body.feedbackRating);
   }

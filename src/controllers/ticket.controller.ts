@@ -370,6 +370,7 @@ export const getTickets = asyncHandler(async (req: any, res: any) => {
     .populate('createdBy', 'email name phone')
     .populate('assignedTo', 'name')
     .populate('salesAssignee', 'name email')
+    .populate('logistics')
     .sort('-createdAt')
     .skip(skip)
     .limit(lim)

@@ -1585,7 +1585,24 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
   const requestedFinal = String(req.body?.engineerFinalStatus || "").toUpperCase().trim();
   const requestedFinalizedAt = toDateOrNull(req.body?.engineerFinalizedAt);
   const canSetFinal = requestedFinal === "REPAIRABLE" || requestedFinal === "NOT_REPAIRABLE";
+  // Explicit sentinel so a regular job card save (which echoes the current value) never clears it.
+  const wantsClearFinal = requestedFinal === "CLEAR";
   const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
+
+  if (wantsClearFinal) {
+    if (roleName !== "ENGINEER" && roleName !== "ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied: Only engineers can clear the final decision.",
+      });
+    }
+    if (String(ticket.status || "").toUpperCase() !== "UNDER_REPAIRED") {
+      return res.status(400).json({
+        success: false,
+        message: "Final decision can only be cleared while the ticket is Under Repair.",
+      });
+    }
+  }
 
   const created = !jobcard;
   if (!jobcard) {
@@ -1682,6 +1699,36 @@ export const updateTicketJobCard = asyncHandler(async (req: any, res: any) => {
       } catch (e: any) {
         console.warn("📧 Sales notification failed:", e?.message || e);
       }
+    }
+  }
+
+  // Engineer cleared the Approve (Repaired) / Scrap decision: unit goes back to plain Under Repair.
+  if (wantsClearFinal) {
+    const prevFinal = String((jobcard as any)?.engineerFinalStatus || "").toUpperCase().trim();
+    (jobcard as any).engineerFinalStatus = undefined;
+    (jobcard as any).engineerFinalizedAt = undefined;
+    (jobcard as any).engineerFinalizedBy = undefined;
+    await jobcard.save();
+
+    if (prevFinal) {
+      const ticketCode = String((ticket as any).ticketId || ticket._id || "");
+      void safeCreateNotification({
+        title: "Engineer Final Decision Cleared",
+        message: `${ticketCode} final decision cleared — back to Under Repair`.slice(0, 500),
+        kind: "JOB_CARD_FINAL",
+        meta: {
+          ticketDbId: String(ticket._id),
+          ticketId: String((ticket as any).ticketId || ""),
+          engineerFinalStatus: "",
+          engineerFinalizedBy: String(req.user?._id || ""),
+        },
+        targetRoles: ["ADMIN", "SALES"],
+        targetUsers: [
+          (ticket as any)?.createdBy?._id || (ticket as any)?.createdBy,
+          (ticket as any)?.salesAssignee?._id || (ticket as any)?.salesAssignee,
+          ...(Array.isArray((ticket as any)?.assignedTo) ? (ticket as any).assignedTo : []),
+        ],
+      });
     }
   }
 

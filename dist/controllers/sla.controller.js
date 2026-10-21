@@ -6,11 +6,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getSLAOverview = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
-function ticketScopeQuery(user) {
+async function ticketScopeQuery(user) {
     const roleName = user?.role?.name;
-    if (roleName === "ENGINEER") {
-        return { assignedTo: user._id };
-    }
+    // ENGINEER is unscoped, matching the tickets list and the dashboard. The SLA Monitor tab
+    // is on the engineer's nav (the role carries `sla:view`), so scoping it here made that
+    // visible tab report a smaller total than Admin's for the same period.
     if (roleName === "CUSTOMER") {
         const legacyMatch = user?.phone
             ? { "customer.phone": user.phone }
@@ -28,7 +28,7 @@ function ticketScopeQuery(user) {
 // @desc    Get SLA overview
 // @route   GET /api/sla
 exports.getSLAOverview = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const tickets = await Ticket_model_1.default.find(ticketScopeQuery(req.user)).select('createdAt ticketId slaStatus');
+    const tickets = await Ticket_model_1.default.find(await ticketScopeQuery(req.user)).select('createdAt ticketId slaStatus');
     const stats = {
         total: tickets.length,
         ok: tickets.filter(t => t.slaStatus === 'OK').length,

@@ -550,6 +550,10 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
     const courierName = String(req.body?.courierName || "").trim();
     const lrNumber = String(req.body?.lrNumber || "").trim();
     const dispatchLocation = String(req.body?.dispatchLocation || "").trim();
+    // Optional Delivery Method (same options as Pickup). Only touch the ticket when the
+    // caller actually sent the field, so older clients keep their current value.
+    const hasDeliveryMethod = req.body && Object.prototype.hasOwnProperty.call(req.body, "deliveryMethod");
+    const deliveryMethod = hasDeliveryMethod ? String(req.body.deliveryMethod || "").trim() : null;
     if (!dispatchDate) {
         return res.status(400).json({ success: false, message: "dispatchDate is required" });
     }
@@ -588,6 +592,11 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
     await logistics.populate("ticket");
     // Link latest logistics to ticket (single reference in model)
     ticket.logistics = logistics._id;
+    // Delivery Method chosen in Dispatch is stored on the ticket (admin/sales only roles
+    // reach this endpoint, matching who may set it through ticket details).
+    if (deliveryMethod !== null) {
+        ticket.set("deliveryMethod", deliveryMethod);
+    }
     // Move ticket in flow after under-dispatch review
     if (String(ticket.status || "").toUpperCase() === "UNDER_DISPATCH") {
         ticket.status = "DISPATCHED";
@@ -612,7 +621,10 @@ exports.scheduleDispatch = (0, error_middleware_1.asyncHandler)(async (req, res)
 // @route   GET /api/logistics/pending-dispatch-approvals
 exports.getPendingDispatchApprovals = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").toUpperCase();
-    if (roleName !== "ADMIN" && roleName !== "SALES") {
+    // Read-only list, gated by `logistics:view` on the route. Approving/rejecting is still
+    // ADMIN-only (see approveDispatch / rejectDispatch). Blocking ENGINEER here made the
+    // dashboard's "Under Approval" card read 0 for them while Admin saw the real count.
+    if (roleName === "CUSTOMER") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
     const baseQuery = {

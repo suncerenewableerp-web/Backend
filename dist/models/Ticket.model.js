@@ -103,6 +103,7 @@ const ticketSchema = new mongoose_1.default.Schema({
     salesAssignee: { type: mongoose_1.default.Schema.ObjectId, ref: "User" }, // Sales owner (optional)
     salesAssigneeEmail: { type: String, trim: true, lowercase: true },
     salesAssigneeName: { type: String, trim: true },
+    deliveryMethod: { type: String, trim: true, default: '' },
     jobCard: { type: mongoose_1.default.Schema.ObjectId, ref: 'JobCard' },
     logistics: { type: mongoose_1.default.Schema.ObjectId, ref: 'Logistics' },
     slaStatus: {

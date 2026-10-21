@@ -3,32 +3,58 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getClientDetails = exports.getInventorySummary = exports.getServicingStatus = exports.getTicketTrends = exports.getDashboard = void 0;
+exports.getClientDetails = exports.getInventorySummary = exports.getServicingStatus = exports.getTicketTrends = exports.getDashboard = exports.ONSITE_REPAIR_STATUS = void 0;
 const Ticket_model_1 = __importDefault(require("../models/Ticket.model"));
 const JobCard_model_1 = __importDefault(require("../models/JobCard.model"));
 const error_middleware_1 = require("../middleware/error.middleware");
+// Synthetic status bucket for on-site (offline booking) tickets being worked on. They are
+// stored as UNDER_REPAIRED like workshop repairs, but the UI counts and lists them apart,
+// so the dashboard reports them apart too. Kept in sync with the frontend Dashboard.
+exports.ONSITE_REPAIR_STATUS = "ONSITE_REPAIR";
 function toPositiveInt(v) {
     const n = typeof v === "number" ? v : Number.parseInt(String(v || ""), 10);
     if (!Number.isFinite(n) || n <= 0)
         return null;
     return Math.trunc(n);
 }
-function ticketScopeQuery(user) {
-    const roleName = user?.role?.name;
-    if (roleName === "ENGINEER") {
-        return { assignedTo: user._id };
-    }
+// Visibility scope for the dashboard aggregations.
+//
+// This MUST stay identical to the rule `getTickets` (ticket.controller.ts) applies to the
+// tickets list, otherwise the dashboard cards count a different set of tickets than the
+// list they link to.
+//
+// ENGINEER is deliberately NOT scoped: an engineer's dashboard has to report the same
+// operational picture as Admin's. Scoping them to "workshop tickets + their own
+// assignments + job cards they finalised" meant an engineer saw only the slice of the
+// pipeline they had touched — 578 tickets against Admin's 3242, 32 under dispatch
+// against 42 — so Outward, Resolved, Total and Under Warranty all read lower on their
+// dashboard than on Admin's for the very same data.
+//
+// Async because the customer rule stays per-user and callers already await this.
+async function ticketScopeQuery(user) {
+    const roleName = String(user?.role?.name || "").trim().toUpperCase();
     if (roleName === "CUSTOMER") {
-        const legacyMatch = user?.phone
-            ? { "customer.phone": user.phone }
-            : { "customer.name": user?.name };
-        return {
-            $or: [
-                { createdBy: user._id },
-                { createdBy: { $exists: false }, ...legacyMatch },
-                { createdBy: null, ...legacyMatch },
-            ],
-        };
+        const email = user?.email ? String(user.email).trim().toLowerCase() : "";
+        const phone = user?.phone ? String(user.phone).trim() : "";
+        const name = user?.name ? String(user.name).trim() : "";
+        const legacyMatch = phone
+            ? { "customer.phone": phone }
+            : name
+                ? { "customer.name": name }
+                : null;
+        const visibilityOr = [{ createdBy: user._id }];
+        if (email)
+            visibilityOr.push({ "customer.email": email });
+        if (phone)
+            visibilityOr.push({ "customer.phone": phone });
+        // Last resort only when we don't have stable identifiers.
+        if (!email && !phone && name)
+            visibilityOr.push({ "customer.name": name });
+        if (legacyMatch) {
+            visibilityOr.push({ createdBy: { $exists: false }, ...legacyMatch });
+            visibilityOr.push({ createdBy: null, ...legacyMatch });
+        }
+        return { $or: visibilityOr };
     }
     return {};
 }
@@ -36,7 +62,7 @@ function ticketScopeQuery(user) {
 // @route   GET /api/dashboard
 exports.getDashboard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const pipeline = [
-        { $match: ticketScopeQuery(req.user) },
+        { $match: await ticketScopeQuery(req.user) },
         { $group: {
                 _id: null,
                 totalTickets: { $sum: 1 },
@@ -304,7 +330,7 @@ exports.getTicketTrends = (0, error_middleware_1.asyncHandler)(async (req, res) 
     const tz = safeTz(req.query?.tz);
     // Use a generous start window to avoid timezone edge misses near midnight.
     const start = new Date(Date.now() - (days + 1) * 24 * 60 * 60 * 1000);
-    const scope = ticketScopeQuery(req.user);
+    const scope = await ticketScopeQuery(req.user);
     const createdRows = await Ticket_model_1.default.aggregate([
         { $match: { ...scope, createdAt: { $gte: start } } },
         {
@@ -388,7 +414,7 @@ exports.getTicketTrends = (0, error_middleware_1.asyncHandler)(async (req, res) 
 // @route   GET /api/dashboard/servicing-status?period=fortnightly|monthly|yearly&year=2026&month=5&fortnight=1&tz=Asia/Kolkata
 exports.getServicingStatus = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const tz = safeTz(req.query?.tz);
-    const scope = ticketScopeQuery(req.user);
+    const scope = await ticketScopeQuery(req.user);
     const win = computePeriodWindow({
         period: req.query?.period,
         year: req.query?.year,
@@ -448,7 +474,7 @@ exports.getServicingStatus = (0, error_middleware_1.asyncHandler)(async (req, re
 // cumulative, so a slice and its drill-down disagreed.
 exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const tz = safeTz(req.query?.tz);
-    const scope = ticketScopeQuery(req.user);
+    const scope = await ticketScopeQuery(req.user);
     const period = String(req.query?.period || "all").trim().toLowerCase();
     // Bounds of the selected window. Both stay null only for period = "all" (no date cap).
     let periodStart = null;
@@ -518,9 +544,31 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
     // reconstruct each ticket's status as of the last day of the period from statusHistory —
     // that belonged to the cumulative "snapshot at period end" model, and it left the status
     // slices disagreeing with the drill-down list, which filters on current status.)
+    //
+    // On-site (offline booking) tickets also sit in UNDER_REPAIRED while an engineer works
+    // on them, but the tickets list keeps them in their own "On-site Repairing" tab and the
+    // dashboard's "Under Progress" tile excludes them. Folding both into one UNDER_REPAIRED
+    // slice made the "Under Progress" slice read higher than the tile and the tab it is
+    // supposed to agree with, so on-site work gets its own bucket here.
     const statusAggregation = Ticket_model_1.default.aggregate([
         { $match: baseMatch },
-        { $group: { _id: "$status", count: { $sum: 1 } } },
+        {
+            $group: {
+                _id: {
+                    $cond: [
+                        {
+                            $and: [
+                                { $eq: ["$status", "UNDER_REPAIRED"] },
+                                { $eq: [{ $toUpper: { $ifNull: ["$serviceType", ""] } }, "ONSITE"] },
+                            ],
+                        },
+                        exports.ONSITE_REPAIR_STATUS,
+                        "$status",
+                    ],
+                },
+                count: { $sum: 1 },
+            },
+        },
         { $sort: { count: -1 } },
     ]);
     const [vendorRows, modelRows, statusRows, customerRows] = await Promise.all([
@@ -582,7 +630,7 @@ exports.getInventorySummary = (0, error_middleware_1.asyncHandler)(async (req, r
 // @route   GET /api/dashboard/client-details?period=...&clientName=...&clientAddress=...&tz=Asia/Kolkata
 exports.getClientDetails = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const tz = safeTz(req.query?.tz);
-    const scope = ticketScopeQuery(req.user);
+    const scope = await ticketScopeQuery(req.user);
     const win = computePeriodWindow({
         period: req.query?.period,
         year: req.query?.year,

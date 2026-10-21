@@ -63,6 +63,7 @@ const TICKET_LIST_FIELDS = [
     "salesAssignee",
     "salesAssigneeEmail",
     "salesAssigneeName",
+    "deliveryMethod",
     "logistics",
     "createdAt",
     "updatedAt",
@@ -297,24 +298,10 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     };
     // Role-scoped visibility
     const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
-    if (roleName === 'ENGINEER') {
-        // Engineers should only receive work when Sales/Admin moves it to UNDER_REPAIRED.
-        const finalizedRows = await JobCard_model_1.default.find({ engineerFinalizedBy: req.user._id })
-            .select("ticket")
-            .lean();
-        const finalizedTicketIds = Array.from(new Set((finalizedRows || []).map((r) => String(r?.ticket || "")).filter(Boolean)));
-        // NOTE: On-site (offline booking) tickets must be visible only to the assigned engineer.
-        const visibilityOr = [{ status: "UNDER_REPAIRED", serviceType: { $ne: "ONSITE" } }];
-        if (finalizedTicketIds.length)
-            visibilityOr.push({ _id: { $in: finalizedTicketIds } });
-        visibilityOr.push({ assignedTo: req.user._id });
-        const existingSearchOr = query.$or;
-        delete query.$or;
-        query.$and = [
-            { $or: visibilityOr },
-            ...(existingSearchOr ? [{ $or: existingSearchOr }] : []),
-        ];
-    }
+    // ENGINEER is intentionally unscoped, exactly like ADMIN and SALES: the engineer's
+    // tickets list and dashboard must report the same pipeline Admin sees. Restricting them
+    // to the workshop plus their own assignments/finalised job cards is what made the two
+    // dashboards disagree (578 tickets vs 3242, 32 under dispatch vs 42).
     if (roleName === 'CUSTOMER') {
         // Only show tickets belonging to this customer.
         // Prefer explicit `createdBy`, but also allow matching by the embedded customer identity
@@ -350,6 +337,7 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         .populate('createdBy', 'email name phone')
         .populate('assignedTo', 'name')
         .populate('salesAssignee', 'name email')
+        .populate('logistics')
         .sort('-createdAt')
         .skip(skip)
         .limit(lim)
@@ -364,19 +352,10 @@ exports.getTickets = (0, error_middleware_1.asyncHandler)(async (req, res) => {
         }
     });
 });
-function ticketScopeQuery(user) {
+async function ticketScopeQuery(user) {
     const roleName = String(user?.role?.name || "").trim().toUpperCase();
-    if (roleName === 'ENGINEER') {
-        // Engineers can always work on the repair stage, and can also access tickets explicitly
-        // assigned to them in later stages (dispatch/installation).
-        // NOTE: On-site (offline booking) tickets must be visible only to the assigned engineer.
-        return {
-            $or: [
-                { status: "UNDER_REPAIRED", serviceType: { $ne: "ONSITE" } },
-                { assignedTo: user._id },
-            ],
-        };
-    }
+    // ENGINEER is intentionally unscoped here too, so opening a ticket, its job card and its
+    // drill-down modals works for every ticket the (now unscoped) list shows.
     if (roleName === 'CUSTOMER') {
         const email = user?.email ? String(user.email).trim().toLowerCase() : "";
         const phone = user?.phone ? String(user.phone).trim() : "";
@@ -517,11 +496,13 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
             ...(inputCustomer?.phone ? {} : req.user.phone ? { phone: req.user.phone } : {}),
         };
     }
-    // Auto-assign Sales owner based on customer company → rep mapping.
+    // Auto-assign Sales owner based on customer company → rep mapping, but allow
+    // a manually-entered salesAssigneeName (when the user selects "Other") to take precedence.
     if (Object.prototype.hasOwnProperty.call(body, "salesAssignee"))
         delete body.salesAssignee;
     if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeEmail"))
         delete body.salesAssigneeEmail;
+    const customSalesName = String(body?.salesAssigneeName || "").trim();
     if (Object.prototype.hasOwnProperty.call(body, "salesAssigneeName"))
         delete body.salesAssigneeName;
     const salesAssignee = await resolveSalesAssigneeForCompany(body?.customer?.company);
@@ -530,6 +511,12 @@ exports.createTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
             body.salesAssignee = salesAssignee.userId;
         body.salesAssigneeEmail = salesAssignee.email;
         body.salesAssigneeName = salesAssignee.name;
+    }
+    // If user explicitly provided a custom sales owner name (Other), override the auto-resolved one.
+    if (customSalesName) {
+        body.salesAssigneeName = customSalesName;
+        delete body.salesAssignee;
+        delete body.salesAssigneeEmail;
     }
     const ticket = await Ticket_model_1.default.create({
         ...body,
@@ -690,7 +677,7 @@ exports.createTicketsBulk = (0, error_middleware_1.asyncHandler)(async (req, res
 // @route   GET /api/tickets/:id
 exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
-    const scopedQuery = { _id: req.params.id, ...ticketScopeQuery(req.user) };
+    const scopedQuery = { _id: req.params.id, ...(await ticketScopeQuery(req.user)) };
     const ticketQuery = Ticket_model_1.default.findOne(scopedQuery)
         .populate('createdBy', 'email name phone')
         .populate('assignedTo', 'name')
@@ -729,7 +716,7 @@ exports.getTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
 // @route   PUT /api/tickets/:id
 exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => {
     const roleName = req.user?.role?.name;
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) });
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
     // Extra safety beyond RBAC: enforce *which fields* each role can modify.
@@ -954,6 +941,10 @@ exports.updateTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
         }
         if (Object.prototype.hasOwnProperty.call(body, 'assignedTo'))
             ticket.set('assignedTo', body.assignedTo);
+        if (Object.prototype.hasOwnProperty.call(body, 'salesAssigneeName'))
+            ticket.set('salesAssigneeName', String(body.salesAssigneeName || '').trim());
+        if (Object.prototype.hasOwnProperty.call(body, 'deliveryMethod'))
+            ticket.set('deliveryMethod', String(body.deliveryMethod || '').trim());
         if (Object.prototype.hasOwnProperty.call(body, 'customerFeedback'))
             ticket.set('customerFeedback', body.customerFeedback);
         if (Object.prototype.hasOwnProperty.call(body, 'feedbackRating'))
@@ -1133,7 +1124,7 @@ exports.approveInstallationDone = (0, error_middleware_1.asyncHandler)(async (re
     if (!["CUSTOMER", "SALES", "ADMIN", "ENGINEER"].includes(roleNorm)) {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) })
         .populate("createdBy", "email name phone")
         .populate("assignedTo", "name")
         .populate("statusHistory.changedBy", "name")
@@ -1171,7 +1162,7 @@ exports.approveInstallationDone = (0, error_middleware_1.asyncHandler)(async (re
 // @desc    Get pickup details for a ticket (customer-friendly)
 // @route   GET /api/tickets/:id/pickup-details
 exports.getTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) });
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
     const pickup = await Logistics_model_1.default.findOne({ ticket: ticket._id, type: "PICKUP" }).sort("-updatedAt");
@@ -1191,7 +1182,7 @@ exports.upsertTicketPickupDetails = (0, error_middleware_1.asyncHandler)(async (
     if (roleName !== "ADMIN" && roleName !== "SALES") {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) });
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
     if (String(ticket.status || "").toUpperCase() === "CLOSED") {
@@ -1241,7 +1232,7 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
     if (!["ADMIN", "SALES"].includes(roleName)) {
         return res.status(403).json({ success: false, message: "Access denied." });
     }
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) });
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
     const file = req.file;
@@ -1293,7 +1284,7 @@ exports.uploadTicketPickupDocument = (0, error_middleware_1.asyncHandler)(async 
 // @desc    Get installation documents (PDF) for a ticket
 // @route   GET /api/tickets/:id/installation-documents
 exports.getTicketInstallationDocuments = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).select("status installation");
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) }).select("status installation");
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
     res.json({
@@ -1306,7 +1297,7 @@ exports.getTicketInstallationDocuments = (0, error_middleware_1.asyncHandler)(as
 // @desc    Upload installation document (PDF) for a ticket (visible to all ticket viewers)
 // @route   POST /api/tickets/:id/installation-documents
 exports.uploadTicketInstallationDocument = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).select("status installation");
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) }).select("status installation");
     if (!ticket)
         return res.status(404).json({ success: false, message: "Ticket not found" });
     if (String(ticket.status || "").toUpperCase() === "CLOSED") {
@@ -1373,7 +1364,7 @@ exports.uploadTicketInstallationDocument = (0, error_middleware_1.asyncHandler)(
 // @desc    Get (or create) jobcard for a ticket
 // @route   GET /api/tickets/:id/jobcard
 exports.getTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    let ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) }).populate('jobCard');
+    let ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) }).populate('jobCard');
     if (!ticket && String(req.user?.role?.name || "").trim().toUpperCase() === "ENGINEER") {
         // Legacy fallback: allow viewing job card for tickets engineer finalized.
         const raw = await Ticket_model_1.default.findById(req.params.id).populate("jobCard");
@@ -1442,7 +1433,7 @@ function pickJobCardUpdate(input) {
 // @desc    Update (or create) jobcard for a ticket
 // @route   PUT /api/tickets/:id/jobcard
 exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, res) => {
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) });
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) });
     if (!ticket)
         return res.status(404).json({ success: false, message: 'Ticket not found' });
     if (String(req.user?.role?.name || "").trim().toUpperCase() === "ENGINEER" &&
@@ -1457,7 +1448,23 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
     const requestedFinal = String(req.body?.engineerFinalStatus || "").toUpperCase().trim();
     const requestedFinalizedAt = toDateOrNull(req.body?.engineerFinalizedAt);
     const canSetFinal = requestedFinal === "REPAIRABLE" || requestedFinal === "NOT_REPAIRABLE";
+    // Explicit sentinel so a regular job card save (which echoes the current value) never clears it.
+    const wantsClearFinal = requestedFinal === "CLEAR";
     const roleName = String(req.user?.role?.name || "").trim().toUpperCase();
+    if (wantsClearFinal) {
+        if (roleName !== "ENGINEER" && roleName !== "ADMIN") {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied: Only engineers can clear the final decision.",
+            });
+        }
+        if (String(ticket.status || "").toUpperCase() !== "UNDER_REPAIRED") {
+            return res.status(400).json({
+                success: false,
+                message: "Final decision can only be cleared while the ticket is Under Repair.",
+            });
+        }
+    }
     const created = !jobcard;
     if (!jobcard) {
         jobcard = await JobCard_model_1.default.create({
@@ -1541,6 +1548,34 @@ exports.updateTicketJobCard = (0, error_middleware_1.asyncHandler)(async (req, r
             }
         }
     }
+    // Engineer cleared the Approve (Repaired) / Scrap decision: unit goes back to plain Under Repair.
+    if (wantsClearFinal) {
+        const prevFinal = String(jobcard?.engineerFinalStatus || "").toUpperCase().trim();
+        jobcard.engineerFinalStatus = undefined;
+        jobcard.engineerFinalizedAt = undefined;
+        jobcard.engineerFinalizedBy = undefined;
+        await jobcard.save();
+        if (prevFinal) {
+            const ticketCode = String(ticket.ticketId || ticket._id || "");
+            void safeCreateNotification({
+                title: "Engineer Final Decision Cleared",
+                message: `${ticketCode} final decision cleared — back to Under Repair`.slice(0, 500),
+                kind: "JOB_CARD_FINAL",
+                meta: {
+                    ticketDbId: String(ticket._id),
+                    ticketId: String(ticket.ticketId || ""),
+                    engineerFinalStatus: "",
+                    engineerFinalizedBy: String(req.user?._id || ""),
+                },
+                targetRoles: ["ADMIN", "SALES"],
+                targetUsers: [
+                    ticket?.createdBy?._id || ticket?.createdBy,
+                    ticket?.salesAssignee?._id || ticket?.salesAssignee,
+                    ...(Array.isArray(ticket?.assignedTo) ? ticket.assignedTo : []),
+                ],
+            });
+        }
+    }
     // If an engineer worked on this job card, keep them attached to the ticket so they
     // can see it later in their list even after sales/admin closes it.
     if (roleName === "ENGINEER" && req.user?._id) {
@@ -1566,7 +1601,7 @@ exports.deleteTicket = (0, error_middleware_1.asyncHandler)(async (req, res) => 
     if (!confirmId) {
         return res.status(400).json({ success: false, message: "confirmId is required" });
     }
-    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...ticketScopeQuery(req.user) })
+    const ticket = await Ticket_model_1.default.findOne({ _id: req.params.id, ...(await ticketScopeQuery(req.user)) })
         .select("_id ticketId jobCard logistics")
         .lean();
     if (!ticket)
